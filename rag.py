@@ -491,6 +491,18 @@ def render_row(idx: int, row, W: int) -> str:
     return "".join(out)
 
 
+def fit(segs, W: int) -> str:
+    """Join (style, text) segments, clipped to W columns."""
+    out, used = [], 0
+    for style, text in segs:
+        if used >= W:
+            break
+        text = text[:W - used]
+        used += len(text)
+        out.append(STY[style] + text + RESET)
+    return "".join(out)
+
+
 def status_rows():
     if S.label is None:
         return [""], [""]
