@@ -1,0 +1,1 @@
+"""Local, private document assistant."""
