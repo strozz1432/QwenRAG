@@ -8,7 +8,7 @@ from pathlib import Path
 from .. import activity
 from ..browse import age, brief, pick_files, relevant_now, short, skim, to_count
 from ..retrieval import build_summary, remember
-from .flow import PACE, step, stream_reply
+from .flow import PACE, set_progress, step, stream_reply
 from .render import BOX_CLOSE, BOX_OPEN, BOX_SEP
 from .state import S, emit
 

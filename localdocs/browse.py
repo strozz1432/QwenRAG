@@ -70,6 +70,7 @@ def pick_files(target: str, count: int) -> tuple[list, str]:
         return list(activity.LAST_FILES)[:8], "from before"
     if ";" in t:  # several named files: "a.pdf; b.pdf; c.md"
         chosen = []
+        paths = sorted(paths, key=lambda p: p not in activity.LAST_FILES)   # a name means the file we just showed, if there is one
         for part in [x.strip() for x in t.split(";") if x.strip()]:
             hit = next((p for p in paths if part in Path(p).name.lower() and p not in chosen), None) \
                 or next((p for p in paths if part in p.lower() and p not in chosen), None)
