@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import codecs
 import os
 import signal
@@ -10,11 +11,17 @@ import termios
 import time
 import tty
 from pathlib import Path
+from .. import activity
+from ..activity import asked as note_asked, context as activity_context, last_file, record, reset as reset_activity
+from ..browse import WORDS
+from ..followup import suggest
+from ..router import route
 from .doc_commands import add_doc, write_doc
+from .file_commands import find_relevant, look_files
 from .flow import PACE, set_progress, step, stream_reply
-from ..config import COMMANDS, EMBED, FORMAT, LLM, OLLAMA
+from ..config import COMMANDS, EMBED, FORMAT, LLM, OLLAMA, STEER_MARK
 from ..llm import check_ollama
-from ..retrieval import MEMORY, build_summary, needs_docs, remember, retrieve
+from ..retrieval import MEMORY, build_summary, remember, retrieve
 from ..store import index, indexed_paths, load_store
 from .controls import handle, parse
 from .render import draw
@@ -26,99 +33,243 @@ from .state import S, echo, emit, fmt_secs, write
 
 
 
-async def answer(q: str):
-    step("Understanding your question", f"router: {LLM} · does this need your files?", 0.1)
-    if not await asyncio.to_thread(needs_docs, q):
-        step(detail="general chat", progress=0.3)
+async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
+    if not use_docs:
+        step("Thinking", "general chat", 0.3)
         reply = await stream_reply([
             {"role": "system", "content": "You are a friendly, concise private assistant running "
-             "locally on the user's laptop. You can answer questions about their documents and "
-             "summarise files with /sum. Keep replies short. " + FORMAT},
+             "locally on the user's laptop. It can answer questions about their documents, summarise "
+             "files, and create or add to documents (Word, PDF, Markdown, text) when they ask in plain "
+             "words. Never say you can't save or write documents. Do not describe yourself or list what you can do "
+             "unless asked, and never repeat anything you already said; if the request is unclear, ask ONE short question. Keep replies short. " + FORMAT},
+            {"role": "system", "content": activity_context()},
             *MEMORY, {"role": "user", "content": q}], start=0.3)
         remember(q, reply)
+        activity.LAST_TEXT["md"] = reply
         return
     step("Searching your files", f"ollama.embed {EMBED} → cosine search, top 5", 0.25,
-         note=f"Searching your files for \"{q if len(q) <= 50 else q[:47] + '…'}\"")
-    # short follow-ups ("and the second one?") borrow the previous question for searching
-    prev = next((m["content"] for m in reversed(MEMORY) if m["role"] == "user"), "")
-    top = await asyncio.to_thread(retrieve, f"{prev} {q}" if prev and len(q.split()) < 8 else q)
+         note="Looking through your files")
+    # the router already turned the message into a standalone search query (follow-ups resolved)
+    top = await asyncio.to_thread(retrieve, query or q)
     if not top:
         emit("Nothing is indexed yet.")
         return
     names = sorted({Path(c[0]).name for c in top})
     context = "\n\n".join(f"[{Path(c[0]).name}]\n{c[2]}" for c in top)
     step("Reading the matches", f"ollama.chat {LLM} · answering from {len(top)} chunks", 0.4,
-         note=f"Found {len(top)} relevant passages in {', '.join(names)}, reading them now")
-    reply = await stream_reply([*MEMORY, {"role": "user", "content":
+         note=f"Found it in {', '.join(names[:3])}{' and more' if len(names) > 3 else ''}")
+    reply = await stream_reply([{"role": "system", "content": activity_context()}, *MEMORY, {"role": "user", "content":
         "Answer the question using only the context below. If the answer is not there, say so "
         f"plainly. Do not list file names in your answer. {FORMAT}\n\n"
-        f"Context:\n{context}\n\nQuestion: {q}"}])
+        f"Context:\n{context}\n\nQuestion: {q}" + (f"\n(What they are asking for: {intent})" if intent else "")}])
     remember(q, reply)
+    activity.LAST_TEXT["md"] = reply
+    record(f"Answered a question from your files ({', '.join(names[:3])})")
+    S.next_hint = ("docs", f"Answered '{q[:100]}' using {', '.join(names[:3])}")
     emit("\n\nSources: " + ", ".join(names))
 
 
 async def summarise(arg: str):
-    step("Finding the file", f"looking for '{arg}'", 0.05, note=f"Looking for '{arg}' in your indexed files")
+    step("Finding the file", f"looking for '{arg}'", 0.05, note=f"Looking for {arg}")
     await asyncio.sleep(PACE)
     info = await asyncio.to_thread(build_summary, arg, set_progress)
     if "msg" in info:
         emit(info["msg"])
+        record(f"Tried to summarise '{arg}': {info['msg'].splitlines()[0]}", False)
         return
     step("Writing the summary", f"ollama.chat {LLM} · writing the final summary", 0.7,
-         note="Writing the summary")
+         note="Putting the summary together")
     reply = await stream_reply([{"role": "user", "content": info["prompt"]}], start=0.7)
     remember(f"Summarise {info['name']}", reply)
+    activity.LAST_TEXT["md"] = reply
+    record(f"Summarised {info['name']}", path=info["name"].replace("~", str(Path.home()), 1))
+    S.next_hint = ("sum", f"Summarised {info['name']}. Summary began: {reply[:300]}")
+
+
+async def recall(q: str):
+    """Questions about the session itself are answered from the action log only, never from chat memory."""
+    step("Thinking", "checking what happened", 0.3)
+    await stream_reply([
+        {"role": "system", "content": activity_context() + "\n\nAnswer the user's question about this session using ONLY the "
+         "two lists above. Reply in one or two natural, friendly sentences, like a person would; never copy the list lines or "
+         "show timestamps. DONE means it happened. FAILED or NO CHANGE means it did NOT happen: start with 'No' and say why. "
+         "If something is not in the lists, you did not do it. Do not describe yourself.\n"
+         "Examples: log 'NO CHANGE: notes.txt was NOT modified, it already had a title' and the user asks 'did you add a title?' "
+         "-> 'No, notes.txt already had a title, so I left it as it was.' / log 'DONE: Created ~/Documents/Report.pdf' and "
+         "the user asks 'did you make a pdf?' -> 'Yes, I saved it as Report.pdf in your Documents folder.'"},
+        {"role": "user", "content": q}], start=0.3)
+
+
+def show_help():
+    emit("\n".join(f"  {d.strip():<9} {desc}" for d, _, desc in COMMANDS) +
+         "\n  You don't need the slash: just say what you want, e.g. \"summarise invoice.pdf\" or "
+         "\"make a pdf about X\".\n\n")
+
+
+def show_files(everything: bool = False):
+    paths = indexed_paths()
+    record("Listed the indexed files" + (" (all of them)" if everything else " (a grouped overview)"))
+    if everything or len(paths) <= 15:
+        emit("\n".join(f"  {p}" for p in paths) + "\n\n")
+        remember("list my files", f"I listed all {len(paths)} indexed files.")
+        return
+    home = str(Path.home())
+    groups: dict = {}
+    for p in paths:
+        parts = Path(p.replace(home, "~", 1)).parts   # ('~', 'Desktop', 'Trade', ...)
+        key = "/".join(parts[:3]) if len(parts) > 3 else "/".join(parts[:-1])
+        groups[key] = groups.get(key, 0) + 1
+    shown = sorted(groups.items(), key=lambda kv: -kv[1])
+    lines = [f"  {k:<48} {n} file{'s' if n != 1 else ''}" for k, n in shown[:14]]
+    if len(shown) > 14:
+        lines.append(f"  … and {len(shown) - 14} more folders")
+    emit(f"I know {len(paths)} files, from your Documents, Desktop and Downloads. By folder:\n\n" + "\n".join(lines) +
+         '\n\nSay "list all files" for every path, or name one to summarise it.\n\n')
+    remember("list my files", f"I showed an overview of the {len(paths)} files I've indexed, grouped by folder: "
+             + ", ".join(f"{k} ({n})" for k, n in shown[:8]))
+
+
+def clear_chat():
+    MEMORY.clear()
+    reset_activity()
+    S.text, S.rows_key, S.follow = "", None, True
+    emit(f"◆ Local Docs · {LLM} · private, on-device\n✓ Conversation cleared.\n")
+
+
+def plan_from_words(d: dict, text: str):
+    """Turn the router's decision into (command, argument, announcement)."""
+    act = d["action"]
+    if d["target"].lower().strip(" .") in ("it", "that", "this", "that file", "this file", "the file", "the document", "same file") and last_file():
+        d = {**d, "target": Path(last_file()).name}  # "add a title to it" -> the file we just worked on
+    if act == "sum":
+        t = d["target"] or d["request"] or text
+        return "/sum", t, ""
+    if act == "look":
+        return "/look", f"{d['count']}|{d['target'] or 'random'}|{d['depth']}", ""
+    if act == "recall":
+        return "/recall", "", ""
+    if act == "unclear":
+        return "/unclear", d["request"], ""
+    if act == "find":
+        return "/find", d["request"] or d["target"], ""
+    if act == "write":
+        fmt = d["format"].lower().lstrip(".")
+        fmt = fmt if fmt in ("docx", "pdf", "md", "txt") else "docx"
+        return "/write", f"{fmt} {d['request'] or text}", ""
+    if act == "add":
+        if not d["target"]:
+            return "/add", "", ""
+        return "/add", f'"{d["target"]}" {d["request"] or text}', ""
+    if act == "files":
+        return "/files", "all" if re.search(r"(?i)\b(all|every|entire|full|complete|whole)\b", text) else "", ""
+    if act == "reindex":
+        return "/reindex", "", ""
+    if act == "clear":
+        return "/clear", "", ""
+    if act == "help":
+        return "/help", "", ""
+    return "", "", ""
+
+
+async def offer_next():
+    """End the job like a person would: say what we could do next. A short 'yes' later acts on it."""
+    hint, S.next_hint = S.next_hint, None
+    if not hint or S.pending or S.steer:
+        return
+    line = await asyncio.to_thread(suggest, *hint)
+    if line:
+        emit(f"\n\n{line}")
+        activity.OFFER["text"] = line   # not stored in the chat memory, so the model can't parrot it back
 
 
 async def turn(text: str):
     echo(text)
+    if not text.startswith(("/quit", "/exit")):
+        note_asked(text)
     cmd, _, arg = text.partition(" ")
+    natural = not cmd.startswith("/")
     if cmd in ("/quit", "/exit"):
         S.stop.set()
         return
-    if cmd == "/help":
-        emit("\n".join(f"  {d.strip():<9} {desc}" for d, _, desc in COMMANDS) +
-             "\n  anything else: chat, or ask about your files\n\n")
-        return
-    if cmd == "/clear":
-        MEMORY.clear()
-        S.text, S.rows_key, S.follow = "", None, True
-        emit(f"◆ Local Docs · {LLM} · private, on-device\n✓ Conversation cleared.\n")
-        return
-    if cmd == "/files":
-        emit("\n".join(f"  {p}" for p in indexed_paths()) + "\n\n")
-        return
-    if cmd.startswith("/") and cmd not in ("/sum", "/reindex", "/write", "/add"):
-        emit(f"! Unknown command {cmd}. Type /help.\n\n")
-        return
-    if cmd == "/sum" and not arg.strip():
-        emit("! Usage: /sum <filename or topic>\n\n")
-        return
-    if cmd in ("/write", "/add") and not arg.strip():
-        emit("! Usage: /write [pdf|docx|md|txt] <what to write>  or  /add <filename> <what to add>\n\n")
-        return
+    if not natural:
+        if cmd == "/help":
+            return show_help()
+        if cmd == "/clear":
+            return clear_chat()
+        if cmd == "/files":
+            return show_files(arg.strip() == "all")
+        if cmd not in ("/sum", "/reindex", "/write", "/add", "/steer", "/look", "/find"):
+            emit(f"! Unknown command {cmd}. Type /help.\n\n")
+            return
+        if cmd == "/look":  # typed form: /look [count] [folder, name or topic]
+            first, _, rest = arg.strip().partition(" ")
+            arg = f"{first}|{rest.strip() or 'random'}" if (first.isdigit() or first.lower() in WORDS) else f"3|{arg.strip() or 'random'}"
+        if cmd == "/sum" and not arg.strip():
+            emit("! Usage: /sum <filename or topic>\n\n")
+            return
+        if cmd in ("/write", "/add") and not arg.strip():
+            emit("! Usage: /write [pdf|docx|md|txt] <what to write>  or  /add <filename> <what to add>\n\n")
+            return
     async with lock:
         S.current = asyncio.current_task()
         S.t0 = time.monotonic()
         try:
+            use_docs, query, at_start, intent = False, None, False, ""
+            if natural:
+                step("Thinking", "working out what you want", 0.05)
+                d = await asyncio.to_thread(route, text, activity.take_offer())
+                cmd, arg, say = plan_from_words(d, text)
+                use_docs, query = d["action"] == "docs", d["query"]
+                at_start, intent = d["position"].lower() == "start", d["intent"]
+                if cmd == "/add" and not arg:
+                    emit("! Which file should I add that to? Say its name, e.g. \"add that to notes.docx\".\n")
+                    return
+                say = say or (d.get("doing", "") if d["action"] not in ("chat", "recall", "unclear") else "")
+                if say:
+                    emit(f"· {say}\n")
+                    await asyncio.sleep(PACE)
+                if cmd == "/recall":
+                    await recall(text)
+                    emit(f"\n\n◈ Thought for {fmt_secs(time.monotonic() - S.t0)}\n")
+                    return
+                if cmd == "/unclear":
+                    ask = arg or "I'm not sure what you'd like. Could you say it another way, or tell me which file?"
+                    emit(f"{ask}\n")
+                    remember(text, ask)
+                    return
+                if cmd in ("/help", "/clear", "/files"):
+                    show_files(arg == "all") if cmd == "/files" else {"/help": show_help, "/clear": clear_chat}[cmd]()
+                    return
             if cmd == "/reindex":
                 step("Scanning your folders", "walking Documents, Desktop, Downloads", None)
                 n = await asyncio.to_thread(index, set_progress)
                 emit(f"✓ {n} documents indexed.\n\n")
+                record(f"Rescanned your folders ({n} documents indexed)")
             else:
                 if cmd == "/write":
-                    await write_doc(arg)
+                    await write_doc(arg, natural, query)
                 elif cmd == "/add":
-                    await add_doc(arg)
+                    await add_doc(arg, natural, query, at_start)
+                elif cmd == "/sum":
+                    await summarise(arg.strip())
+                elif cmd == "/look":
+                    await look_files(arg)
+                elif cmd == "/find":
+                    await find_relevant(arg)
                 else:
-                    await (summarise(arg.strip()) if cmd == "/sum" else answer(text))
+                    await answer(text, use_docs, query or "", intent)
+                await offer_next()
                 emit(f"\n\n◈ Thought for {fmt_secs(time.monotonic() - S.t0)}\n")
         except asyncio.CancelledError:
             emit("\n\n! Interrupted\n")
+            record(f"Was interrupted before finishing: {text[:100]}", False)
         except Exception as e:
             emit(f"\n\n! Error: {e}\n")
+            record(f"Hit an error on '{text[:80]}': {e}", False)
         finally:
             S.label, S.detail, S.progress, S.current = None, "", None, None
+            S.steer.clear()
+            S.next_hint = None
 
 
 async def startup():
@@ -175,6 +326,17 @@ async def main():
     def on_submit(text):
         if text.split()[0] in ("/quit", "/exit"):  # never wait behind a running job
             S.stop.set()
+            return
+        if text.split()[0] == "/steer":
+            note = text[len("/steer"):].strip()
+            if not note:
+                emit("! Usage: /steer <what to change>, while it's working\n")
+            elif S.current is None:
+                emit("! Nothing is running right now, so just send your message normally.\n")
+            else:
+                S.steer.append(note)
+                record(f"Was redirected by the user mid-reply: {note[:100]}")
+                emit(f"\n{STEER_MARK} {note}\n")
             return
         S.pending.append(text)
         S.wake.set()

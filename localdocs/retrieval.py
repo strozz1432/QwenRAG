@@ -1,6 +1,8 @@
 """Chat memory, the question router, search and file summaries."""
 from __future__ import annotations
 
+import random
+import re
 from pathlib import Path
 from .config import LLM, SUMMARY_FORMAT
 from .llm import chat, embed
@@ -34,14 +36,17 @@ def retrieve(question: str) -> list:
     return search(embed([question])[0], 5)
 
 
-def build_summary(fragment: str, progress=None) -> dict:
+def build_summary(fragment: str, progress=None, forced_note: str | None = None) -> dict:
     """Return {'msg': ...} on failure, else {'prompt', 'name', 'note'} ready to stream."""
     paths = indexed_paths()
     frag = fragment.lower()
+    if paths and re.search(r"\brandom\b|\byou pick\b|\bpick one\b|\bwhichever\b|\byour choice\b|^(any|some|an?|one)( \w+)? (file|doc|document)$", frag):
+        picked = random.choice(paths)
+        return build_summary(picked, progress, "Picked one at random:")
     matches = [p for p in paths if frag in Path(p).name.lower()]
     if not matches:  # also allow typing part of the folder path
         matches = [p for p in paths if frag in p.lower()]
-    note = None
+    note = forced_note
     if len(matches) > 1 and len({Path(p).name for p in matches}) == 1:
         # same filename in several folders: use the most recently modified copy
         matches = [max(matches, key=lambda p: Path(p).stat().st_mtime)]
@@ -62,10 +67,10 @@ def build_summary(fragment: str, progress=None) -> dict:
     parts = [c[2] for c in sorted((c for c in CHUNKS if c[0] == path), key=lambda c: c[1])]
     groups = ["\n".join(parts[i:i + 4]) for i in range(0, len(parts), 4)]
     if progress:
-        progress(f"reading {Path(path).name}", 0.09, "Reading the file", "Reading the document")
+        progress(f"reading {Path(path).name}", 0.09, "Reading the file", "Reading it")
         progress(f"{len(parts)} passages", 0.1, "Reading the file",
-                 f"Finished reading ({len(parts)} passages)" +
-                 (f", going through it in {len(groups)} sections" if len(groups) > 1 else ""))
+                 f"Read it all ({len(parts)} passages)" +
+                 (f", in {len(groups)} parts" if len(groups) > 1 else ""))
     if len(groups) <= 1:
         prompt = f"Summarise this document clearly and concisely. {SUMMARY_FORMAT}\n\n{groups[0] if groups else ''}"
     else:
@@ -73,14 +78,14 @@ def build_summary(fragment: str, progress=None) -> dict:
         for i, g in enumerate(groups, 1):
             if progress:
                 progress(f"ollama.chat {LLM} · section {i}/{len(groups)}", 0.1 + 0.5 * (i - 1) / len(groups), "Finding key points",
-                         f"Picking out the key points, section {i} of {len(groups)}")
+                         f"Key points, part {i} of {len(groups)}")
             partials.append(chat(f"Summarise this passage in a few sentences:\n\n{g}"))
             if progress:
                 progress(f"ollama.chat {LLM} · finished section {i}/{len(groups)}", 0.1 + 0.5 * i / len(groups), "Finding key points")
         while len(partials) > 6:
             if progress:
                 progress(f"ollama.chat {LLM} · merging {len(partials)} section notes", 0.6, "Combining the notes",
-                         f"Combining the notes from {len(partials)} sections")
+                         "Pulling the notes together")
             joined = ["\n".join(partials[i:i + 6]) for i in range(0, len(partials), 6)]
             partials = [chat(f"Combine these notes into one concise summary:\n\n{j}") for j in joined]
         prompt = ("Combine these notes about one document into a clear, concise summary. "

@@ -203,6 +203,10 @@ def handle(ev):
             if S.sel_a != S.sel_b:
                 copy_selection()
             else:
+                row = S.sel_a[0] if S.sel_a else -1
+                bid = S.box_rows.get(row)
+                if bid:  # a click on a file's header opens / closes its box
+                    S.open_boxes.symmetric_difference_update({bid})
                 S.sel_a = S.sel_b = None
         S.dirty = True
         return

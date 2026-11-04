@@ -24,6 +24,8 @@ class S:
     menu_sel = -1
     menu_prefix = ""
     rows_key = None
+    open_boxes: set = set()   # ids of expanded per-file boxes
+    box_rows: dict = {}       # row index -> box id, for clicking a header
     rows: list = []
     jump_row = -1
     H = 1                     # height of the conversation area, set by draw()
@@ -35,6 +37,8 @@ class S:
     pasting = None
     stop: asyncio.Event
     pending: list = []        # messages waiting for the current job to finish
+    steer: list = []          # mid-job instructions from /steer, applied to the current reply
+    next_hint = None          # (kind, detail) set by a finished action, used to offer a next step
     busy = False              # a turn is running (or about to)
     wake: asyncio.Event       # set when something is added to `pending`
     on_submit = None          # set by the app: called with the text the user entered
@@ -45,6 +49,7 @@ RESET = "\x1b[0m"
 BLUE = "\x1b[38;5;75m"
 STY = {
     "": "",
+    "boxhead": "",
     "user": "\x1b[48;5;238;38;5;255m",
     "thought": "\x1b[2;3m",
     "dim": "\x1b[38;5;245m",

@@ -6,6 +6,7 @@ Appending never edits in place without a safety copy: the original goes to
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import time
 from pathlib import Path
@@ -71,9 +72,17 @@ def _add_docx_blocks(doc, blocks: list):
             doc.add_paragraph("―" * 20)
 
 
-def _write_docx(path: Path, blocks: list, append: bool):
+def _write_docx(path: Path, blocks: list, append: bool, at_start: bool = False):
     import docx
     doc = docx.Document(str(path)) if append else docx.Document()
+    if append and at_start:  # build the new content separately, then move it to the top of the body
+        new = docx.Document()
+        _add_docx_blocks(new, blocks)
+        body = doc.element.body
+        for el in reversed([e for e in new.element.body if not e.tag.endswith("}sectPr")]):
+            body.insert(0, el)
+        doc.save(str(path))
+        return
     if append:
         doc.add_paragraph()
     _add_docx_blocks(doc, blocks)
@@ -174,15 +183,16 @@ def _pdf_bytes(blocks: list) -> bytes:
     return buf.getvalue()
 
 
-def _write_pdf(path: Path, blocks: list, append: bool):
+def _write_pdf(path: Path, blocks: list, append: bool, at_start: bool = False):
     from pypdf import PdfReader, PdfWriter
     new = io.BytesIO(_pdf_bytes(blocks))
     if not append:
         path.write_bytes(new.getvalue())
         return
     writer = PdfWriter()
-    writer.append(PdfReader(str(path)))
-    writer.append(PdfReader(new))
+    old = PdfReader(str(path))
+    for part in ((PdfReader(new), old) if at_start else (old, PdfReader(new))):
+        writer.append(part)
     tmp = path.with_suffix(".pdf.tmp")
     with open(tmp, "wb") as f:
         writer.write(f)
@@ -191,15 +201,21 @@ def _write_pdf(path: Path, blocks: list, append: bool):
 
 # ---------------------------------------------------------------- public API
 
-def _write_text(path: Path, markdown: str, append: bool):
-    if append:
+def _write_text(path: Path, markdown: str, append: bool, at_start: bool = False):
+    text = markdown.strip()
+    if path.suffix.lower() == ".txt":  # plain text: no markdown markers
+        text = "\n".join(re.sub(r"^#+\s*", "", ln).replace("**", "") for ln in text.split("\n"))
+    if append and at_start:
+        old = path.read_text(encoding="utf-8", errors="replace")
+        path.write_text(text + "\n\n" + old, encoding="utf-8")
+    elif append:
         with open(path, "a", encoding="utf-8") as f:
-            f.write("\n\n" + markdown.strip() + "\n")
+            f.write("\n\n" + text + "\n")
     else:
-        path.write_text(markdown.strip() + "\n", encoding="utf-8")
+        path.write_text(text + "\n", encoding="utf-8")
 
 
-def write_document(path: Path, markdown: str, append: bool = False) -> Path | None:
+def write_document(path: Path, markdown: str, append: bool = False, at_start: bool = False) -> Path | None:
     """Create (or append to) a document; returns the backup path when appending."""
     ext = path.suffix.lower()
     if ext not in WRITABLE:
@@ -216,9 +232,9 @@ def write_document(path: Path, markdown: str, append: bool = False) -> Path | No
         path.parent.mkdir(parents=True, exist_ok=True)
     blocks = parse_blocks(markdown)
     if ext == ".docx":
-        _write_docx(path, blocks, append)
+        _write_docx(path, blocks, append, at_start)
     elif ext == ".pdf":
-        _write_pdf(path, blocks, append)
+        _write_pdf(path, blocks, append, at_start)
     else:
-        _write_text(path, markdown, append)
+        _write_text(path, markdown, append, at_start)
     return backup

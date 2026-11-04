@@ -5,12 +5,14 @@ import math
 import textwrap
 import time
 from ..markdown import parse_blocks, spans
-from ..config import BAR_WIDTH, LONG_AFTER, SHOW_PROGRESS, SPINNER
+from ..config import BAR_WIDTH, LONG_AFTER, SHOW_PROGRESS, SPINNER, STEER_MARK
 from .state import RESET, S, STY, fmt_secs, term_size, write
 
 def line_style(line: str) -> str:
     if line.startswith("❯ "):
         return "user"
+    if line.startswith(STEER_MARK + " "):
+        return "user"  # a steer note looks like any other message you sent
     if line.startswith("◈ "):
         return "thought"
     if line.startswith("! "):
@@ -122,12 +124,11 @@ def block_rows(text: str, W: int) -> list:
     return rows
 
 
-def build_rows(W: int) -> list:
-    """Render the conversation into display rows (cached until it changes).
-    A row is (base_style, [(style, text), ...], is_continuation)."""
-    key = (len(S.text), W)
-    if S.rows_key == key:
-        return S.rows
+BOX_OPEN, BOX_SEP, BOX_CLOSE = "\ue000", "\ue001", "\ue002"   # markers around a collapsible per-file box
+
+
+def _line_rows(lines: list, W: int) -> list:
+    """Rows for ordinary conversation lines (chrome lines styled, the rest rendered as markdown)."""
     rows, run = [], []
 
     def flush():
@@ -135,7 +136,7 @@ def build_rows(W: int) -> list:
             rows.extend(block_rows("\n".join(run), W))
             run.clear()
 
-    for line in S.text.split("\n"):
+    for line in lines:
         st = line_style(line)
         if not st:
             run.append(line)
@@ -147,6 +148,56 @@ def build_rows(W: int) -> list:
                 seg = seg + [("", " " * pad)] if pad > 0 else seg
             rows.append((st, seg, i > 0))
     flush()
+    return rows
+
+
+def _box_rows(title: str, body: list, done: bool, expanded: bool, W: int) -> list:
+    """A header row with a dropdown arrow, plus (when open) the live output inside a left-ruled box."""
+    arrow = "▾" if expanded else "▸"
+    head = [("bluebold", f"{arrow} "), ("bold", title[:max(10, W - 22)])]
+    if not done:
+        head.append(("dim", "   ● writing…"))
+    elif not expanded:
+        head.append(("dim", "   click to open"))
+    if not expanded and not done:
+        last = next((l.strip() for l in reversed(body) if l.strip() and not l.startswith("· ")), "")
+        if last:
+            head.append(("dim", "  " + last.replace("**", "")[-max(0, W - len(title) - 30):]))
+    rows = [("boxhead", head, False)]
+    if expanded:
+        for base, segs, cont in _line_rows(body, max(10, W - 3)):
+            rows.append((base, [("rule", "│ ")] + segs, cont))
+        rows.append(("rule", [("", "╰" + "─" * min(W - 2, 30))], False))
+    return rows
+
+
+def build_rows(W: int) -> list:
+    """Render the conversation into display rows (cached until it changes).
+    A row is (base_style, [(style, text), ...], is_continuation)."""
+    key = (len(S.text), W, frozenset(S.open_boxes))
+    if S.rows_key == key:
+        return S.rows
+    rows, plain = [], []
+    S.box_rows = {}
+    lines = S.text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith(BOX_OPEN):
+            rows.extend(_line_rows(plain, W))
+            plain.clear()
+            bid, _, title = line[1:].partition(BOX_SEP)
+            body, i = [], i + 1
+            while i < len(lines) and not lines[i].startswith(BOX_CLOSE):
+                body.append(lines[i])
+                i += 1
+            done = i < len(lines)
+            S.box_rows[len(rows)] = bid
+            rows.extend(_box_rows(title, body, done, bid in S.open_boxes, W))
+        else:
+            plain.append(line)
+        i += 1
+    rows.extend(_line_rows(plain, W))
     S.rows, S.rows_key = rows, key
     return rows
 
@@ -263,7 +314,7 @@ def draw():
         elif S.busy and S.buf.strip():
             hint = " enter: send after this finishes · esc: stop now and send this instead"
         elif S.busy:
-            hint = " type to queue a message · esc interrupt · ctrl+c exit"
+            hint = " type to queue a message · /steer <note> to adjust it · esc interrupt · ctrl+c exit"
         else:
             hint = " / commands · tab · wheel/pgup/pgdn scroll · drag to select & copy · esc interrupt · ctrl+c exit"
         out.append(fit([("dim", hint)], W))

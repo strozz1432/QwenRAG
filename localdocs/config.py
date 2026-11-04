@@ -8,12 +8,14 @@ EMBED = "qwen3-embedding:0.6b"
 OLLAMA = "http://localhost:11434"
 ROOTS = [Path.home() / d for d in ("Documents", "Desktop", "Downloads")]
 EXTS = {".pdf", ".docx", ".txt", ".md"}
-SKIP_DIRS = {".venv", "node_modules", ".git", "site-packages", "chroma_db", "Library"}
+SKIP_SUFFIXES = (".app", ".jdk", ".egg-info", ".xcassets", ".framework", ".xcodeproj")  # bundles and library folders, not your documents
+SKIP_DIRS = {"Pods", "DerivedData", "build", "dist", "venv", ".venv", "node_modules", ".git", "site-packages", "chroma_db", "Library"}
 MAX_BYTES = 30 * 1024 * 1024
 CHUNK, OVERLAP = 2500, 300  # characters
 NUM_CTX = 8192
 OUTPUT_DIR = Path.home() / "Documents" / "Local Docs"  # where /write puts new files (and /add backups)
 DB_PATH = Path(__file__).resolve().parent.parent / "index.db"
+STEER_MARK = "⤮"  # shown in front of /steer notes (two curves crossing); swap for any symbol
 SPINNER = "◜◠◝◞◡◟"
 LONG_AFTER = 20  # seconds before the detailed status (stages, bar) appears
 SHOW_PROGRESS = True  # set False to hide the progress bar
@@ -30,6 +32,9 @@ COMMANDS = [
     ("/sum", "/sum ", "summarise a file (filename or topic)"),
     ("/write", "/write ", "create a doc: /write [pdf|docx|md|txt] <what to write>"),
     ("/add", "/add ", "add to a file: /add <filename> <what to add>"),
+    ("/steer", "/steer ", "while it's working: add an instruction it uses right away"),
+    ("/look", "/look ", "look at several files: /look [count] [folder or topic]"),
+    ("/find", "/find ", "find the files relevant to a topic (or to right now)"),
     ("/files", "/files", "list every indexed file"),
     ("/reindex", "/reindex", "rescan your folders for new or changed files"),
     ("/clear", "/clear", "forget this conversation and clear the screen"),

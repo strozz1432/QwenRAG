@@ -20,9 +20,11 @@ def embed(texts: list) -> list:
         return json.load(r)["embeddings"]
 
 
-def chat(prompt: str) -> str:
+def chat(prompt: str, as_json: bool = False) -> str:
     body = {"model": LLM, "messages": [{"role": "user", "content": prompt}],
-            "stream": False, "think": False, "options": {"num_ctx": NUM_CTX}}
+            "stream": False, "think": False, "keep_alive": "30m", "options": {"num_ctx": NUM_CTX, "repeat_penalty": 1.1}}
+    if as_json:
+        body["format"] = "json"
     with _post("/api/chat", body) as r:
         return json.load(r)["message"]["content"].strip()
 

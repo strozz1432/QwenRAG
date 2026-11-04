@@ -54,7 +54,7 @@ def resolve_target(fragment: str) -> tuple[Path | None, str]:
     return Path(hits[0]), ""
 
 
-def gather_context(request: str, limit: int = 7000) -> str:
+def gather_context(request: str, limit: int = 7000, query: str | None = None) -> str:
     """Text the model can draw on: files named in the request, plus a search when the request needs your files."""
     parts, used = [], 0
     low = request.lower()
@@ -67,8 +67,10 @@ def gather_context(request: str, limit: int = 7000) -> str:
                 continue
             parts.append(f"[{name}]\n{text}")
             used += len(text)
-    if not parts and needs_docs(request):
-        for c in retrieve(request):
+    # `query` comes from the router (already understood); None means ask the older yes/no check instead
+    search = query if query is not None else (request if needs_docs(request) else "")
+    if not parts and search:
+        for c in retrieve(search):
             parts.append(f"[{Path(c[0]).name}]\n{c[2]}")
     return "\n\n".join(parts)
 

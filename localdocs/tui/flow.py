@@ -32,15 +32,46 @@ def set_progress(detail: str, frac: float, label: str | None = None, note: str |
         time.sleep(PACE)  # let each stage be seen before the next one appears
 
 
+def looping(text: str) -> bool:
+    """True when the end of the text is a chunk that has already appeared several times (a degenerate loop)."""
+    tail = text[-120:]
+    return len(text) > 600 and len(tail.strip()) > 40 and text.count(tail) >= 3
+
+
+def with_steer(messages: list, steer: list) -> list:
+    """Append the user's mid-job instructions to the last user message."""
+    if not steer:
+        return messages
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if m["role"] == "user":
+            m["content"] += ("\n\nUPDATED INSTRUCTION (replaces or adjusts the request above; follow every part of it, "
+                            "including any format or length it asks for): " + " / ".join(steer) +
+                            "\nStart your reply directly with the content. Do not mention this update or that the request changed.")
+            break
+    return out
+
+
 async def stream_reply(messages, start=0.45):
+    """Stream a reply into the chat. If the user /steers meanwhile, stop and restart with their note included."""
+    while True:
+        applied = len(S.steer)
+        reply, redirected = await _stream_once(with_steer(messages, S.steer[:applied]), applied)
+        if not redirected:
+            return reply
+        S.label, S.progress, S.detail = "Adjusting", None, "taking your note into account"
+        emit("\n\n· Reworking it with your note\n")
+
+
+async def _stream_once(messages, applied: int):
     loop = asyncio.get_running_loop()
     q: asyncio.Queue = asyncio.Queue()
     cancel, holder = threading.Event(), []
 
     def worker():
         try:
-            body = {"model": LLM, "messages": messages, "stream": True, "think": False,
-                    "options": {"num_ctx": NUM_CTX}}
+            body = {"model": LLM, "messages": messages, "stream": True, "think": False, "keep_alive": "30m",
+                    "options": {"num_ctx": NUM_CTX, "repeat_penalty": 1.15, "num_predict": 2000}}
             with _post("/api/chat", body) as r:
                 holder.append(r)
                 for line in r:
@@ -61,7 +92,17 @@ async def stream_reply(messages, start=0.45):
     threading.Thread(target=worker, daemon=True).start()
     first, n, full = True, 0, []
     try:
-        while (tok := await q.get()) is not None:
+        while True:
+            try:
+                tok = await asyncio.wait_for(q.get(), 0.25)
+            except asyncio.TimeoutError:
+                if len(S.steer) > applied:
+                    return "".join(full), True
+                continue
+            if tok is None:
+                return "".join(full), False
+            if len(S.steer) > applied:
+                return "".join(full), True
             if isinstance(tok, Exception):
                 raise tok
             if first:
@@ -71,7 +112,9 @@ async def stream_reply(messages, start=0.45):
             S.detail = f"ollama.chat {LLM} · streaming · {n} tokens"
             full.append(tok)
             emit(tok)
-        return "".join(full)
+            if n % 150 == 0 and looping("".join(full)):  # the model got stuck repeating itself: stop it
+                emit("\n\n· I started repeating myself, so I stopped there\n")
+                return "".join(full), False
     finally:
         cancel.set()
         for r in holder:

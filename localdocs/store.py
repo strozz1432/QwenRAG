@@ -9,7 +9,7 @@ import sqlite3
 import zipfile
 from pathlib import Path
 from .config import CHUNK, OVERLAP
-from .config import DB_PATH, EMBED, EXTS, MAX_BYTES, ROOTS, SKIP_DIRS
+from .config import DB_PATH, EMBED, EXTS, MAX_BYTES, ROOTS, SKIP_DIRS, SKIP_SUFFIXES
 from .llm import embed
 
 # ---------------------------------------------------------------- vector store
@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS chunks(path TEXT, idx INTEGER, text TEXT, vec BLOB);
 CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
 """)
 CHUNKS: list = []        # (path, idx, text, normalised vector)
+HEADS: dict = {}          # path -> first chunk of text, for skimming without reopening files
 FILE_NAMES: list = []    # unique basenames, for tab completion
 
 
@@ -36,6 +37,9 @@ def load_store():
         v.frombytes(blob)
         new.append((path, idx, text, v))
     CHUNKS[:] = new
+    HEADS.clear()
+    for path, idx, text, _ in sorted(new, key=lambda c: (c[0], c[1])):
+        HEADS.setdefault(path, text)   # the first chunk of each file: all a skim needs
     FILE_NAMES[:] = sorted({Path(c[0]).name for c in new})
 
 
@@ -43,11 +47,16 @@ def indexed_paths() -> list:
     return sorted({c[0] for c in CHUNKS})
 
 
-def search(qvec, k: int = 5) -> list:
+def search_scored(qvec, k: int = 5) -> list:
+    """Best chunks as (similarity, chunk), most similar first."""
     q = normalise(qvec)
     scored = sorted(((sum(map(operator.mul, q, c[3])), c) for c in CHUNKS),
                     key=lambda s: s[0], reverse=True)
-    return [c for _, c in scored[:k]]
+    return scored[:k]
+
+
+def search(qvec, k: int = 5) -> list:
+    return [c for _, c in search_scored(qvec, k)]
 
 
 
@@ -66,7 +75,7 @@ def find_files():
                 if p.name.startswith("."):
                     continue
                 if p.is_dir():
-                    if p.name not in SKIP_DIRS and not p.name.endswith(".app"):
+                    if p.name not in SKIP_DIRS and not p.name.endswith(SKIP_SUFFIXES):
                         stack.append(p)
                 elif p.suffix.lower() in EXTS and not p.name.startswith("~$"):
                     try:
