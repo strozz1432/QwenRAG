@@ -57,12 +57,45 @@ def on_topic(topic: str, n: int = 6, exclude: str = "") -> list:
         hay = (Path(p).name + " " + head(p, 1500)).lower()
         if score >= 0.66 or any(w in hay for w in words):
             keep.append((score, p, sn))
+    keep = [(s_, p, sn) for s_, p, sn in keep if p in dedupe([x[1] for x in keep])]
     return keep[:n]
+
+
+def _ident(p: str) -> tuple:
+    """Same file name inside a same-named folder = a mirrored copy (backups nest whole folders inside themselves)."""
+    return (Path(p).name.lower(), Path(p).parent.name.lower())
+
+
+def dedupe(paths: list) -> list:
+    """Drop copies: the same file name with the same opening is one file (backup folders nest copies of everything)."""
+    seen, out = set(), []
+    for p in paths:
+        key = _ident(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def next_files(read: list, n: int = 3) -> list:
+    """Files not read yet that look related to the ones that were: what is worth offering next."""
+    seed = " ".join(Path(p).name + " " + head(p, 250) for p in read)[:1500]
+    done = {_ident(p) for p in read}
+    out = []
+    for score, p, _ in rank_files(seed, 30):
+        key = _ident(p)
+        if p in read or key in done or Path(p).name in {Path(o).name for o in out}:
+            continue
+        done.add(key)
+        out.append(p)
+        if len(out) >= n:
+            break
+    return out
 
 
 def pick_files(target: str, count: int) -> tuple[list, str]:
     """Choose `count` files: random, from a folder, or about a topic. Returns (paths, how they were chosen)."""
-    paths = indexed_paths()
+    paths = dedupe(indexed_paths())
     t = (target or "").strip().lower()
     if not paths:
         return [], ""
@@ -83,8 +116,8 @@ def pick_files(target: str, count: int) -> tuple[list, str]:
     in_folder = [p for p in paths if t in p.lower()]
     if in_folder:  # a folder or name fragment: "downloads", "TraderAI", "invoice"
         return random.sample(in_folder, min(count, len(in_folder))), f"from {target}"
-    ranked = rank_files(target, count)
-    return [p for _, p, _ in ranked], f"about {target}"
+    ranked = rank_files(target, count * 3)
+    return dedupe([p for _, p, _ in ranked])[:count], f"about {target}"
 
 
 def brief(path: str) -> str:

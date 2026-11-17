@@ -20,6 +20,8 @@ def record(what: str, ok: bool = True, path=None, status: str | None = None):
     del LOG[:-MAX_ENTRIES]
     if path:
         LAST["path"] = str(path)
+        from . import preferences
+        preferences.note_folder(path)
 
 
 def asked(text: str):
@@ -45,6 +47,12 @@ def reset():
     LAST["path"] = None
 
 
+def _known() -> str:
+    from . import preferences
+    s = preferences.summary()
+    return f"\n\n{s} Let this shape your tone and suggestions quietly; never recite it back unless asked." if s else ""
+
+
 def context() -> str:
     """System-prompt text describing the session's real actions."""
     rows = "\n".join(f"- {t} {st}: {w}" for t, w, st in LOG) or "- (nothing yet)"
@@ -54,4 +62,4 @@ def context() -> str:
             "Things you have actually done in this session, oldest first. This list is the truth: "
             "if the user asks whether you did something and it is not listed, say plainly that you did not; "
             "if it is listed, confirm it and give the details (file, place, what changed). "
-            "Do not claim to have done anything that is not here.\n" + rows)
+            "Do not claim to have done anything that is not here.\n" + rows + _known())

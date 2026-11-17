@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 index.db
 chroma_db/
+preferences.json

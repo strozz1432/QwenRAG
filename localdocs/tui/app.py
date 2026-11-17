@@ -15,11 +15,14 @@ from .. import activity
 from ..activity import asked as note_asked, context as activity_context, last_file, record, reset as reset_activity
 from ..browse import WORDS
 from ..followup import suggest
-from ..router import route
+from .. import preferences as prefs
+from ..router import FULL_WORDS, SKIM_WORDS, route
 from .doc_commands import add_doc, write_doc
 from .file_commands import find_relevant, look_files
 from .flow import PACE, set_progress, step, stream_reply
-from ..config import COMMANDS, EMBED, FORMAT, LLM, OLLAMA, STEER_MARK
+from .. import config
+from ..llm import installed_models
+from ..config import COMMANDS, EMBED, FORMAT, OLLAMA, STEER_MARK
 from ..llm import check_ollama
 from ..retrieval import MEMORY, build_summary, remember, retrieve
 from ..store import index, indexed_paths, load_store
@@ -56,7 +59,7 @@ async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
         return
     names = sorted({Path(c[0]).name for c in top})
     context = "\n\n".join(f"[{Path(c[0]).name}]\n{c[2]}" for c in top)
-    step("Reading the matches", f"ollama.chat {LLM} · answering from {len(top)} chunks", 0.4,
+    step("Reading the matches", f"ollama.chat {config.LLM} · answering from {len(top)} chunks", 0.4,
          note=f"Found it in {', '.join(names[:3])}{' and more' if len(names) > 3 else ''}")
     reply = await stream_reply([{"role": "system", "content": activity_context()}, *MEMORY, {"role": "user", "content":
         "Answer the question using only the context below. If the answer is not there, say so "
@@ -77,7 +80,7 @@ async def summarise(arg: str):
         emit(info["msg"])
         record(f"Tried to summarise '{arg}': {info['msg'].splitlines()[0]}", False)
         return
-    step("Writing the summary", f"ollama.chat {LLM} · writing the final summary", 0.7,
+    step("Writing the summary", f"ollama.chat {config.LLM} · writing the final summary", 0.7,
          note="Putting the summary together")
     reply = await stream_reply([{"role": "user", "content": info["prompt"]}], start=0.7)
     remember(f"Summarise {info['name']}", reply)
@@ -133,7 +136,7 @@ def clear_chat():
     MEMORY.clear()
     reset_activity()
     S.text, S.rows_key, S.follow = "", None, True
-    emit(f"◆ Local Docs · {LLM} · private, on-device\n✓ Conversation cleared.\n")
+    emit(f"◆ Local Docs · {config.LLM} · private, on-device\n✓ Conversation cleared.\n")
 
 
 def plan_from_words(d: dict, text: str):
@@ -145,7 +148,11 @@ def plan_from_words(d: dict, text: str):
         t = d["target"] or d["request"] or text
         return "/sum", t, ""
     if act == "look":
-        return "/look", f"{d['count']}|{d['target'] or 'random'}|{d['depth']}", ""
+        depth, said = d["depth"], bool(FULL_WORDS.search(text) or SKIM_WORDS.search(text))
+        prefs.note_depth(depth, said)
+        if not said and prefs.depth_default() in ("skim", "full"):
+            depth = prefs.depth_default()   # what they usually ask for, when they didn't say
+        return "/look", f"{d['count']}|{d['target'] or 'random'}|{depth}", ""
     if act == "recall":
         return "/recall", "", ""
     if act == "unclear":
@@ -154,7 +161,9 @@ def plan_from_words(d: dict, text: str):
         return "/find", d["request"] or d["target"], ""
     if act == "write":
         fmt = d["format"].lower().lstrip(".")
-        fmt = fmt if fmt in ("docx", "pdf", "md", "txt") else "docx"
+        said = fmt in ("docx", "pdf", "md", "txt")
+        fmt = fmt if said else prefs.favorite_format()   # no format named: the one they usually pick
+        prefs.note_format(fmt, said)
         return "/write", f"{fmt} {d['request'] or text}", ""
     if act == "add":
         if not d["target"]:
@@ -196,6 +205,23 @@ async def turn(text: str):
             return show_help()
         if cmd == "/clear":
             return clear_chat()
+        if cmd == "/model":
+            name, models = arg.strip(), installed_models()
+            if not name:
+                emit("Installed models (type /model and pick one):\n" + "\n".join(f"  {'●' if m == config.LLM else ' '} {m}" for m in models) + "\n\n")
+            elif name not in models:
+                emit(f"! '{name}' isn't installed. Installed: {', '.join(models) or 'none found'}\n\n")
+            else:
+                prefs.set_model(name)
+                emit(f"✓ Now using {name}.\n\n")
+            return
+        if cmd == "/prefs":
+            if arg.strip() == "clear":
+                prefs.clear()
+                emit("✓ Forgotten. I'll start learning again from scratch.\n\n")
+            else:
+                emit(prefs.describe() + "\n\n")
+            return
         if cmd == "/files":
             return show_files(arg.strip() == "all")
         if cmd not in ("/sum", "/reindex", "/write", "/add", "/steer", "/look", "/find"):
@@ -217,7 +243,11 @@ async def turn(text: str):
             use_docs, query, at_start, intent = False, None, False, ""
             if natural:
                 step("Thinking", "working out what you want", 0.05)
-                d = await asyncio.to_thread(route, text, activity.take_offer())
+                offer = activity.take_offer()
+                prefs.learn_message(text)
+                d = await asyncio.to_thread(route, text, offer)
+                if offer:
+                    prefs.note_offer(d["action"] not in ("chat", "unclear") or False)
                 cmd, arg, say = plan_from_words(d, text)
                 use_docs, query = d["action"] == "docs", d["query"]
                 at_start, intent = d["position"].lower() == "start", d["intent"]
@@ -362,7 +392,7 @@ async def main():
         write("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h")
         loop.add_reader(fd, on_stdin)
         loop.add_signal_handler(signal.SIGWINCH, lambda: setattr(S, "dirty", True))
-        emit(f"◆ Local Docs · {LLM} · private, on-device\n")
+        emit(f"◆ Local Docs · {config.LLM} · private, on-device\n")
         asyncio.ensure_future(startup())
         render = asyncio.ensure_future(render_loop())
         asyncio.ensure_future(worker())

@@ -4,7 +4,8 @@ from __future__ import annotations
 import random
 import re
 from pathlib import Path
-from .config import LLM, SUMMARY_FORMAT
+from . import config
+from .config import SUMMARY_FORMAT
 from .llm import chat, embed
 from .store import CHUNKS, indexed_paths, search
 
@@ -77,14 +78,14 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None) 
         partials = []
         for i, g in enumerate(groups, 1):
             if progress:
-                progress(f"ollama.chat {LLM} · section {i}/{len(groups)}", 0.1 + 0.5 * (i - 1) / len(groups), "Finding key points",
+                progress(f"ollama.chat {config.LLM} · section {i}/{len(groups)}", 0.1 + 0.5 * (i - 1) / len(groups), "Finding key points",
                          f"Key points, part {i} of {len(groups)}")
             partials.append(chat(f"Summarise this passage in a few sentences:\n\n{g}"))
             if progress:
-                progress(f"ollama.chat {LLM} · finished section {i}/{len(groups)}", 0.1 + 0.5 * i / len(groups), "Finding key points")
+                progress(f"ollama.chat {config.LLM} · finished section {i}/{len(groups)}", 0.1 + 0.5 * i / len(groups), "Finding key points")
         while len(partials) > 6:
             if progress:
-                progress(f"ollama.chat {LLM} · merging {len(partials)} section notes", 0.6, "Combining the notes",
+                progress(f"ollama.chat {config.LLM} · merging {len(partials)} section notes", 0.6, "Combining the notes",
                          "Pulling the notes together")
             joined = ["\n".join(partials[i:i + 6]) for i in range(0, len(partials), 6)]
             partials = [chat(f"Combine these notes into one concise summary:\n\n{j}") for j in joined]

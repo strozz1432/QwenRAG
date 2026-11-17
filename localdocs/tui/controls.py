@@ -5,7 +5,9 @@ import base64
 import shutil
 import subprocess
 import time
+from .. import config
 from ..config import COMMANDS
+from ..llm import installed_models
 from ..store import FILE_NAMES
 from .render import build_rows, row_plain
 from .state import S, term_size, write
@@ -85,6 +87,10 @@ def compute_menu():
         frag = b[5:].lower()
         S.menu = [(n, "", n + " ") for n in FILE_NAMES if frag in n.lower() and n.lower().endswith(WRITABLE_EXT)]
         S.menu_prefix = "/add "
+    elif b.startswith("/model "):
+        frag = b[7:].lower()
+        S.menu = [(n, "current" if n == config.LLM else "", n) for n in installed_models() if frag in n.lower()]
+        S.menu_prefix = "/model "
     else:
         S.menu = []
 

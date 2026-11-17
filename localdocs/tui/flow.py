@@ -6,7 +6,8 @@ import json
 import threading
 import time
 
-from ..config import LLM, NUM_CTX
+from .. import config
+from ..config import NUM_CTX
 from ..llm import _post
 from .state import S, emit
 
@@ -70,7 +71,7 @@ async def _stream_once(messages, applied: int):
 
     def worker():
         try:
-            body = {"model": LLM, "messages": messages, "stream": True, "think": False, "keep_alive": "30m",
+            body = {"model": config.LLM, "messages": messages, "stream": True, "think": False, "keep_alive": "30m",
                     "options": {"num_ctx": NUM_CTX, "repeat_penalty": 1.15, "num_predict": 2000}}
             with _post("/api/chat", body) as r:
                 holder.append(r)
@@ -109,7 +110,7 @@ async def _stream_once(messages, applied: int):
                 S.label, S.progress, first = "Writing the answer", None, False  # writing isn't compute: no bar
                 emit("\n")
             n += 1
-            S.detail = f"ollama.chat {LLM} · streaming · {n} tokens"
+            S.detail = f"ollama.chat {config.LLM} · streaming · {n} tokens"
             full.append(tok)
             emit(tok)
             if n % 150 == 0 and looping("".join(full)):  # the model got stuck repeating itself: stop it

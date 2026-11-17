@@ -37,6 +37,8 @@ COMMANDS = [
     ("/find", "/find ", "find the files relevant to a topic (or to right now)"),
     ("/files", "/files", "list every indexed file"),
     ("/reindex", "/reindex", "rescan your folders for new or changed files"),
+    ("/model", "/model ", "switch the AI model: /model <installed model>"),
+    ("/prefs", "/prefs", "what I have learned about how you work (/prefs clear forgets it)"),
     ("/clear", "/clear", "forget this conversation and clear the screen"),
     ("/help", "/help", "show these commands"),
     ("/quit", "/quit", "exit"),

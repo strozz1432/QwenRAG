@@ -7,7 +7,7 @@ from pathlib import Path
 from ..retrieval import MEMORY
 
 from ..authoring import (DRAFT_RULES, gather_context, new_path, parse_write, resolve_target, split_add, tidy)
-from ..config import LLM
+from .. import config
 from ..docwriter import write_document
 from .. import activity
 from ..activity import record
@@ -61,7 +61,7 @@ async def write_doc(arg: str, natural: bool = False, query: str | None = None):
         context = "\n\n".join(x for x in (earlier(natural), context) if x)
         if context:
             emit("· Using the earlier chat and your files\n")
-        step("Drafting", f"ollama.chat {LLM} · drafting the document", 0.3, note="Drafting")
+        step("Drafting", f"ollama.chat {config.LLM} · drafting the document", 0.3, note="Drafting")
         md = await _draft("You are a careful writer producing a document for the user. " + DRAFT_RULES, request, context)
     if not md:
         emit("\n! The model returned nothing, so nothing was saved.\n")
@@ -95,7 +95,7 @@ async def add_doc(arg: str, natural: bool = False, query: str | None = None, at_
     existing = await asyncio.to_thread(read_text, path)
     context = await asyncio.to_thread(gather_context, request, 7000, query)
     context = "\n\n".join(x for x in (earlier(natural), context) if x)
-    step("Drafting", f"ollama.chat {LLM} · drafting the addition", 0.3, note="Writing the addition")
+    step("Drafting", f"ollama.chat {config.LLM} · drafting the addition", 0.3, note="Writing the addition")
     if at_start:
         system = ("You are adding something to the START of an existing document, such as a title or short intro. "
                   "Write ONLY that new text, as briefly as the request allows (a title is one line starting with '# '). "
@@ -125,5 +125,6 @@ async def add_doc(arg: str, natural: bool = False, query: str | None = None, at_
     S.next_hint = ("add", f"Added '{request[:100]}' to {path.name}")
     record(f"Added to the {'TOP' if at_start else 'END'} of {short(path)}: {request[:120]} (original backed up at {short(backup)})", path=path)
     remember(f"/add {path.name} {request}", f"I added this to {short(path)} (original backed up):\n{md[:2500]}")
-    emit(f"\n\n✓ Added to {"the top of " if at_start else ""}{short(path)}\n· The original is backed up at {short(backup)}\n")
+    where = "the top of " if at_start else ""
+    emit(f"\n\n✓ Added to {where}{short(path)}\n· The original is backed up at {short(backup)}\n")
     await asyncio.to_thread(index, set_progress)

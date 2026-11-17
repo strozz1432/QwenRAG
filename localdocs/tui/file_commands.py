@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from .. import activity
-from ..browse import age, brief, pick_files, relevant_now, short, skim, to_count
+from ..browse import age, brief, next_files, pick_files, relevant_now, short, skim, to_count
 from ..retrieval import build_summary, remember
 from .flow import PACE, set_progress, step, stream_reply
 from .render import BOX_CLOSE, BOX_OPEN, BOX_SEP
@@ -68,7 +68,17 @@ async def look_files(arg: str):
         activity.record(f"{'Read' if full else 'Skimmed'} {short(p)}", path=p)
     names = ", ".join(Path(p).name for p in paths)
     S.next_hint = ("look", ("Read: " if full else "Skimmed (openings only): ") + names)
-    if not full and len(paths) > 1:   # offer the whole set, so a "yes" reads all of them
+    if full:   # these are done: suggest something new instead of re-offering them
+        S.next_hint = None
+        more = await asyncio.to_thread(next_files, paths)
+        if more:
+            first, rest = Path(more[0]).name, [Path(p).name for p in more[1:]]
+            emit(f"\n\nThat's {'all' if len(paths) > 1 else 'it'} for those. What else should I go through? "
+                 f"Want me to take {first} next" + (f", or {' or '.join(rest)}?" if rest else "?"))
+            activity.OFFER["text"] = f"Want me to summarise {first} next? (also related: {', '.join(rest)}) Full name: {more[0]}"
+        else:
+            emit("\n\nThat's all of them. What else would you like me to look at?")
+    elif len(paths) > 1:   # offer the whole set, so a "yes" reads all of them
         S.next_hint = None
         activity.OFFER["text"] = f"Want me to read all {len(paths)} in full? They are: {names}"
         emit(f"\n\nWant me to read all {len(paths)} in full and summarise them?")

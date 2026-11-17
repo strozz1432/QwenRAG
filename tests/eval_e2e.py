@@ -59,6 +59,7 @@ SCENARIOS = {
     "no-thanks": [("summarise Order_39169838.pdf", {}), ("no thanks", {"no": r"Saved|Picked|Looking for", "yes": r"(?i)ok|sure|no problem|alright|anything|let me know"})],
     "topic-look": [("look at some files about invoices", {"yes": r"Picked", "no": r"! "})],
     "folder-look": [("look at two files in the trade folder", {"yes": r"Picked 2 files from", "count": (r"(?m)^\*\*.+\*\*  ·", 2)})],
+    "what-else-after-full": [("read two files in the finance folder carefully", {"yes": r"Summarising ", "count": (r"What else|Want me to take", 1), "no": r"! Error"})],
     "yes-reads-all": [("look at 3 files in downloads", {"yes": r"Picked 3 files"}), ("yes", {"count": (r"Summarising ", 3), "no": r"! Error"})],
     "relevant-topic2": [("which files are about trading?", {"yes": r"\| File \|", "no": r"! "})],
     "relevant-after-work": [("summarise Order_39169838.pdf", {}), ("what files are relevant right now?", {"yes": r"Order_39169838"})],
