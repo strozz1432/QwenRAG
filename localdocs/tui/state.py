@@ -95,8 +95,9 @@ def emit(text: str):
 
 
 def echo(text: str):
+    from ..keys import redact
     S.follow = True
-    emit(f"\n❯ {text}\n\n")
+    emit(f"\n❯ {redact(text)}\n\n")
 
 
 def fmt_secs(s: float) -> str:

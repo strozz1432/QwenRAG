@@ -21,7 +21,7 @@ actions:
 - add: append or add something to an EXISTING file. target = the file name as the user said it. request = what to add
 - look: look at, open, skim or summarise SEVERAL files (plural: "some files", "a few", "3 files", "files in Downloads", or two or more named files, or "all of them / those / these files"). count = how many (a number, default 3). target = "random", a folder or name fragment, or a topic; for several NAMED files put every name separated by ";" (e.g. "a.pdf; b.md; c.pdf"); when the user means the files just shown ("these", "those", "them", "every one of these files", "all of them") target = "previous". depth = "full" when asked to read or summarise them, "skim" for a quick look
 - recall: ONLY questions about this chat session itself: what the assistant did or didn't do ("did you delete anything", "did you add the title", "what did you just do") or what the user asked earlier in this chat ("what was my first question"). A question about what is written in the user's files is docs, never recall
-- unclear: you genuinely cannot tell (NOT for "ok", "cool", "got it", "nice", which are chat) what they want, or the message is too vague or garbled to act on. request = ONE short friendly clarifying question that offers two concrete options
+- unclear: LAST RESORT. Use it only when there is no sensible reading at all (garbled, or two very different actions that could each destroy or waste a lot of work). If one reading is even moderately likely, choose that action and go: the user would rather see a good attempt than answer a question. NOT for "ok", "cool", "got it", "nice" (chat). request = ONE short friendly clarifying question that offers two concrete options
 - find: asks WHICH FILES (a list of file names) are relevant / related / useful / important / worked on, "what files should I look at", "what files matter right now". request = the topic, or "right now" if none given
 - files: ONLY when asked to list or show the files themselves (target = "all" if they want every one). Looking at / reading a file is sum, not files
 - reindex: rescan folders for new or changed files
@@ -98,6 +98,9 @@ def _ask(message: str, recent: str, offer: str) -> dict | None:
 SELF_QUESTION = re.compile(r"^\s*(did|have|had|were|was)\s+you\b|^\s*what\s+(did|have)\s+you\b|^\s*(why|how)\s+did\s+you\b", re.I)
 
 
+# "what did you understand / learn / think / take from that" asks for the assistant's reading of the content, not for its action log
+MENTAL = re.compile(r"\b(understand|understood|learn|learned|learnt|think|thought|get|got|take|took|conclude|gather|notice|noticed|make of|mean|meant)\b", re.I)
+
 PLURAL_FILES = re.compile(r"\b(more than (1|one)|multiple|several|a few|a couple( of)?|some|a bunch of|bunch of|few|many|\d+|two|three|four|five)\b"
                           r"[^.?!]*\b(files?|documents?|docs?|pdfs?|notes|papers|things)\b", re.I)
 LOOK_VERB = re.compile(r"\b(look|looks|check|read|skim|browse|go through|open|show|peek|glance|scan|have a look|take a look|review)\b", re.I)
@@ -170,7 +173,7 @@ def route(message: str, offer: str = "") -> dict:
     hit = rules(message)
     if hit and not re.search(r"(?i)\b(write|make|create|save|add|summari[sz]e)\b", message):
         return hit
-    if SELF_QUESTION.match(message) and not LOOK_VERB.search(message) \
+    if SELF_QUESTION.match(message) and not MENTAL.search(message) and not LOOK_VERB.search(message) \
             and not re.search(r"(?i)\b(write|make|create|add|summari[sz]e|save|find|list)\b", message):
         # "did you delete anything?" asks about what the assistant did: answer from its session log
         return {"action": "recall", **{k: "" for k in FIELDS}, "intent": message}

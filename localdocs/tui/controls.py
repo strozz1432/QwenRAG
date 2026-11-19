@@ -7,7 +7,8 @@ import subprocess
 import time
 from .. import config
 from ..config import COMMANDS
-from ..llm import cloud_models, installed_models
+from ..keys import redact
+from ..llm import api_key, cloud_models, installed_models, providers
 from ..store import FILE_NAMES
 from .render import build_rows, row_plain
 from .state import S, term_size, write
@@ -87,6 +88,12 @@ def compute_menu():
         frag = b[5:].lower()
         S.menu = [(n, "", n + " ") for n in FILE_NAMES if frag in n.lower() and n.lower().endswith(WRITABLE_EXT)]
         S.menu_prefix = "/add "
+    elif b.startswith("/connect ") and " " not in b[9:]:
+        S.menu = [(n, "", n + " ") for n in providers() if n.startswith(b[9:].lower())]
+        S.menu_prefix = "/connect "
+    elif b.startswith("/disconnect ") and " " not in b[12:]:
+        S.menu = [(n, "", n) for n in providers() if api_key(n) and n.startswith(b[12:].lower())]
+        S.menu_prefix = "/disconnect "
     elif b.startswith("/model "):
         frag = b[7:].lower()
         S.menu = [(n, "current" if n == config.LLM else "", n) for n in installed_models() + cloud_models() if frag in n.lower()]
@@ -297,6 +304,6 @@ def submit():
     S.menu, S.menu_sel, S.hist_i = [], -1, None
     if not text:
         return
-    if not S.hist or S.hist[-1] != text:
+    if redact(text) == text and (not S.hist or S.hist[-1] != text):   # a pasted API key never goes into the history
         S.hist.append(text)
     S.on_submit(text)

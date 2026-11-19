@@ -12,6 +12,9 @@ EXTS = {".pdf", ".docx", ".txt", ".md"}
 OCR_LANGS = "eng"        # Tesseract language(s), e.g. "eng+fra"; each must be installed (`tesseract --list-langs`)
 OCR_MAX_PAGES = 40       # scanned PDF pages read by OCR per file (OCR is slower than normal text extraction)
 OCR_MIN_PIXELS = 60      # skip pictures smaller than this on their short side
+FIGURE_MIN_PIXELS = 220   # an embedded PDF picture counts as a figure (worth reading or describing) above this size
+FIGURE_MAX_OCR = 30      # figures per PDF read by OCR while indexing
+FIGURE_MAX_VISION = 6    # figures per PDF described by a vision model when summarising it
 OCR_TIMEOUT = 60         # seconds per page or picture
 SKIP_SUFFIXES = (".app", ".jdk", ".egg-info", ".xcassets", ".framework", ".xcodeproj")  # bundles and library folders, not your documents
 SKIP_DIRS = {"Pods", "DerivedData", "build", "dist", "venv", ".venv", "node_modules", ".git", "site-packages", "chroma_db", "Library"}
@@ -31,7 +34,9 @@ FORMAT = ("Format the reply for a terminal so it is easy to scan: short paragrap
           "and never wrap the reply in a code block.")
 SUMMARY_FORMAT = ("Structure it like this: a one-sentence overview in **bold**, a blank line, then the key points as "
                   "'- ' bullets with **bold** lead-ins, grouped under short '## ' headings if there are several topics. "
-                  "Use a table only if the document is clearly tabular. Never wrap the reply in a code block.")
+                  "Use a table only if the document is clearly tabular. Never wrap the reply in a code block. "
+                  "If the text is thin or looks broken, say so in one short line and summarise what is usable. "
+                  "Never ask the user to paste, resend or upload anything: the file is already on their computer.")
 
 COMMANDS = [
     ("/sum", "/sum ", "summarise a file (filename or topic)"),
@@ -42,6 +47,8 @@ COMMANDS = [
     ("/find", "/find ", "find the files relevant to a topic (or to right now)"),
     ("/files", "/files", "list every indexed file"),
     ("/reindex", "/reindex", "rescan your folders for new or changed files"),
+    ("/connect", "/connect ", "add an API key: /connect <provider> <key> (alone: show what's connected)"),
+    ("/disconnect", "/disconnect ", "remove a saved API key: /disconnect <provider>"),
     ("/model", "/model ", "switch the AI model: /model <installed model>"),
     ("/prefs", "/prefs", "what I have learned about how you work (/prefs clear forgets it)"),
     ("/clear", "/clear", "forget this conversation and clear the screen"),

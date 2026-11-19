@@ -6,6 +6,7 @@ import textwrap
 import time
 from ..markdown import parse_blocks, spans
 from ..config import BAR_WIDTH, LONG_AFTER, SHOW_PROGRESS, SPINNER, STEER_MARK
+from ..keys import redact
 from .state import RESET, S, STY, fmt_secs, term_size, write
 
 def line_style(line: str) -> str:
@@ -292,7 +293,7 @@ def draw():
     out.append(fit(s1, W) if s1 != [""] else "")
     out.append(fit(s2, W) if s2 != [""] else "")
     if q:
-        first = S.pending[0].replace("\n", " ")
+        first = redact(S.pending[0]).replace("\n", " ")
         more = f"  (+{len(S.pending) - 1} more)" if len(S.pending) > 1 else ""
         out.append(fit([("dim", f"   ⋯ queued: {first[:max(10, W - 24)]}{'…' if len(first) > max(10, W - 24) else ''}{more}")], W))
 
@@ -301,7 +302,13 @@ def draw():
         out.append(fit([("rule", "─" * W)], W))
         room = max(1, W - 3)
         start = max(0, S.cur - room)
-        shown = S.buf[start:start + room]
+        masked = redact(S.buf)
+        if masked != S.buf:      # an API key being typed: show dots, cursor at the end
+            shown, start = masked[-room:], 0
+            col = 3 + len(shown)
+        else:
+            shown = S.buf[start:start + room]
+            col = 3 + S.cur - start
         if S.buf.startswith("/") and start == 0:
             cmd, sp, rest = shown.partition(" ")
             body = [("bluebold", cmd), ("", sp + rest)]
@@ -318,7 +325,7 @@ def draw():
         else:
             hint = " / commands · tab · wheel/pgup/pgdn scroll · drag to select & copy · esc interrupt · ctrl+c exit"
         out.append(fit([("dim", hint)], W))
-        cursor = f"\x1b[{H + 4 + q};{3 + S.cur - start}H\x1b[?25h"
+        cursor = f"\x1b[{H + 4 + q};{col}H\x1b[?25h"
     else:
         out.append(fit([("button", " ↓ Jump to bottom "), ("dim", "  click, press End, or just start typing")], W))
         S.jump_row = lines

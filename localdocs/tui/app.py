@@ -5,6 +5,7 @@ import asyncio
 import re
 import codecs
 import os
+import shutil
 import signal
 import sys
 import termios
@@ -21,7 +22,9 @@ from .doc_commands import add_doc, write_doc
 from .file_commands import find_relevant, look_files
 from .flow import PACE, set_progress, step, stream_reply
 from .. import config
-from ..llm import cloud_models, display, installed_models, is_cloud, privacy_line, tag, usable
+from .. import keys
+from ..keys import redact
+from ..llm import CLI_MODELS, NAME_OK, chat_with, PROVIDERS, api_key, cloud_models, fetch_models, key_var, providers, display, installed_models, is_cloud, privacy_line, tag, usable
 from ..config import COMMANDS, EMBED, FORMAT, OLLAMA, STEER_MARK
 from ..llm import check_ollama
 from ..retrieval import MEMORY, build_summary, remember, retrieve
@@ -44,7 +47,7 @@ async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
              "locally on the user's laptop. It can answer questions about their documents, summarise "
              "files, and create or add to documents (Word, PDF, Markdown, text) when they ask in plain "
              "words. Never say you can't save or write documents. Do not describe yourself or list what you can do "
-             "unless asked, and never repeat anything you already said; if the request is unclear, ask ONE short question. Keep replies short. " + FORMAT},
+             "unless asked, and never repeat anything you already said; if the request is unclear, make the most sensible assumption, say what you assumed in a few words, and answer; ask only if you truly cannot proceed. Keep replies short. " + FORMAT},
             {"role": "system", "content": activity_context()},
             *MEMORY, {"role": "user", "content": q}], start=0.3)
         remember(q, reply)
@@ -103,6 +106,92 @@ async def recall(q: str):
         {"role": "user", "content": q}], start=0.3)
 
 
+def connection_status() -> str:
+    on = [pv for pv in providers() if api_key(pv)]
+    rows = [f"  ● {pv:<12} {'via your claude command' if pv == 'claude-cli' else 'environment variable' if os.environ.get(key_var(pv), '').strip() else 'saved'}" for pv in on]
+    rows += ["  (nothing connected yet)"] if not on else []
+    return ("\n".join(rows) + "\n\n  Available: " + ", ".join(pv for pv in providers() if pv not in on)
+            + "\n  /connect <name> <key>   ·   /connect <any-name> <key> <base url> adds your own   ·   /disconnect <name>\n")
+
+
+async def connect(args: list):
+    """/connect <provider> <key> [base url]: save the key, check it works, list the models it unlocks."""
+    if not args:
+        emit("API connections:\n" + connection_status() + "\n")
+        return
+    prov = args[0].lower()
+    if len(args) < 2 and prov != "claude-cli":
+        emit("! Usage: /connect <provider> <key>  (providers: " + ", ".join(providers()) + ")\n\n")
+        return
+    if prov == "claude-cli":
+        return await connect_claude_cli()
+    key, url = args[1], (args[2] if len(args) > 2 else "")
+    if prov not in providers():           # a new, user-named OpenAI-compatible server
+        if not NAME_OK.match(prov) or prov == "ollama":
+            emit("! A custom provider name is 2-24 letters, digits, - or _ (and not 'ollama').\n\n")
+            return
+        if not url:
+            emit(f"! '{prov}' isn't a built-in provider, so I need its address: /connect {prov} <key> <base url>\n"
+                 f"  Built-in: {', '.join(PROVIDERS)}\n\n")
+            return
+        keys.add_custom(prov)
+    if url:
+        keys.set("url:" + prov, url)
+    keys.set(prov, key)
+    step("Checking the key", f"{prov} · listing available models", 0.4)
+    try:
+        models = await asyncio.to_thread(fetch_models, prov)
+    except Exception as e:
+        if "401" in str(e) or "403" in str(e):
+            disconnect(prov, quiet=True)
+            emit(f"! {prov} rejected that key ({e}). Nothing was saved.\n\n")
+            return
+        emit(f"✓ Key saved for {prov}, but I couldn't list its models ({e}). You can still type /model {prov}:<model>.\n\n")
+        return
+    where = "your Keychain" if sys.platform == "darwin" else str(keys.FILE)
+    shown = ", ".join(models[:6]) + (f" … +{len(models) - 6} more" if len(models) > 6 else "")
+    emit(f"✓ Connected to {prov}. Key stored in {where}, never in the project folder.\n  Models: {shown or 'none listed'}\n"
+         f"  Pick one with /model (it will show ☁ in the banner, and text from your files is then sent to {prov}).\n\n")
+
+
+async def connect_claude_cli():
+    """/connect claude-cli: use your own logged-in `claude` command (and so your Claude plan) as the model."""
+    if not shutil.which("claude"):
+        emit("! I can't find the `claude` command. Install Claude Code, log in once with `claude`, then try again.\n\n")
+        return
+    step("Checking claude", "asking your claude command for a one-word reply", 0.4)
+    try:
+        reply = await asyncio.to_thread(chat_with, "claude-cli:haiku", "Reply with the single word: ok")
+    except Exception as e:
+        emit(f"! `claude` didn't answer ({e}). Run `claude` in a terminal to check you're logged in.\n\n")
+        return
+    keys.set("claude-cli", "on")
+    emit("✓ Connected to your claude command. Models: " + ", ".join(CLI_MODELS) + "  (use /model claude-cli:sonnet)\n"
+         "  Things to know:\n"
+         "  - It uses your Claude plan through your own Claude Code login. Local Docs never sees or stores that login.\n"
+         "  - Questions and the passages of your files they use are sent to Anthropic, and count against your plan's limits.\n"
+         "  - Each reply starts a process, so it's slower than the API. Anthropic's rules for plans in other tools have changed before:\n"
+         "    if in doubt, use /connect anthropic <API key> instead.\n\n")
+
+
+def disconnect(prov: str, quiet: bool = False):
+    if prov not in providers():
+        if not quiet:
+            emit("! Usage: /disconnect <provider>  (connected: " + (", ".join(p for p in providers() if api_key(p)) or "none") + ")\n\n")
+        return
+    keys.delete(prov)
+    keys.delete("url:" + prov)
+    if prov not in PROVIDERS:
+        keys.remove_custom(prov)
+    if quiet:
+        return
+    if is_cloud() and config.LLM.startswith(prov + ":"):
+        prefs.set_model(config.DEFAULT_LLM)
+        emit(f"✓ Removed the {prov} key and switched back to {config.DEFAULT_LLM} (on-device).\n\n")
+    else:
+        emit(f"✓ Removed the saved {prov} key.\n\n")
+
+
 def show_help():
     emit("\n".join(f"  {d.strip():<9} {desc}" for d, _, desc in COMMANDS) +
          "\n  You don't need the slash: just say what you want, e.g. \"summarise invoice.pdf\" or "
@@ -142,7 +231,7 @@ def clear_chat():
 def plan_from_words(d: dict, text: str):
     """Turn the router's decision into (command, argument, announcement)."""
     act = d["action"]
-    if d["target"].lower().strip(" .") in ("it", "that", "this", "that file", "this file", "the file", "the document", "same file") and last_file():
+    if re.fullmatch(r"(it|that|this|the|same|that one|this one|the same)( (file|image|picture|photo|pic|document|doc|pdf|one))?", d["target"].lower().strip(" .?!")) and last_file():
         d = {**d, "target": Path(last_file()).name}  # "add a title to it" -> the file we just worked on
     if act == "sum":
         t = d["target"] or d["request"] or text
@@ -194,7 +283,7 @@ async def offer_next():
 async def turn(text: str):
     echo(text)
     if not text.startswith(("/quit", "/exit")):
-        note_asked(text)
+        note_asked(redact(text))
     cmd, _, arg = text.partition(" ")
     natural = not cmd.startswith("/")
     if cmd in ("/quit", "/exit"):
@@ -223,6 +312,10 @@ async def turn(text: str):
             else:
                 emit(f"✓ Now using {name} (on-device).\n\n")
             return
+        if cmd == "/connect":
+            return await connect(arg.split())
+        if cmd == "/disconnect":
+            return disconnect(arg.strip().lower())
         if cmd == "/prefs":
             if arg.strip() == "clear":
                 prefs.clear()

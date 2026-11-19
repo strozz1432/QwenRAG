@@ -20,6 +20,7 @@ db.executescript("""
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime REAL);
 CREATE TABLE IF NOT EXISTS chunks(path TEXT, idx INTEGER, text TEXT, vec BLOB);
 CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
+CREATE TABLE IF NOT EXISTS figdesc(path TEXT PRIMARY KEY, mtime REAL, text TEXT);
 """)
 CHUNKS: list = []        # (path, idx, text, normalised vector)
 HEADS: dict = {}          # path -> first chunk of text, for skimming without reopening files
@@ -117,6 +118,10 @@ def index(progress=None) -> int:
     if ocr.available() and was != "1":   # OCR just became available: retry files that came out empty before
         db.execute("DELETE FROM files WHERE path NOT IN (SELECT DISTINCT path FROM chunks)")
     db.execute("INSERT OR REPLACE INTO meta VALUES('ocr', ?)", ("1" if ocr.available() else "0",))
+    if (db.execute("SELECT v FROM meta WHERE k='img'").fetchone() or [""])[0] != "2":   # image handling changed: re-read pictures once
+        for ext in ocr.IMAGE_EXTS:
+            db.execute("DELETE FROM files WHERE lower(path) LIKE ?", ("%" + ext,))
+        db.execute("INSERT OR REPLACE INTO meta VALUES('img', '2')")
     known = dict(db.execute("SELECT path, mtime FROM files"))
     for gone in set(known) - seen:
         db.execute("DELETE FROM chunks WHERE path=?", (gone,))
@@ -132,6 +137,8 @@ def index(progress=None) -> int:
             parts = list(chunks(read_text(p)))
         except Exception:
             parts = []
+        if not parts and p.suffix.lower() in ocr.IMAGE_EXTS:   # a picture with no text: keep it findable by name
+            parts = [f"Image file {p.name}. It has no readable text; it can be described visually."]
         rows = []
         for i in range(0, len(parts), 32):
             batch = parts[i:i + 32]
