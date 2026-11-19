@@ -17,7 +17,9 @@ from .config import DB_PATH
 
 PATH = Path(DB_PATH).with_name("preferences.json")
 STOP = set("summarise summarize explain write wrote files tell the and for with that this from have what which about file files document documents please could would can you "
-           "show look read tell give make into your them they there their then than just some more also want need".split())
+           "show look read tell give make into your them they there their then than just some more also want need "
+           "hello hey hi thanks thank cheers sure okay yes please until while carefully random really maybe something anything "
+           "everything favourite favorite where when does doing going could should other these those would about after before".split())
 DATA: dict = {"formats": {}, "depth": {}, "folders": {}, "topics": {}, "offers": {"yes": 0, "no": 0}, "notes": []}
 STATED = re.compile(r"(?i)\b(i (always |usually |really )?(prefer|like|want|need|love|hate)|always|never|from now on|"
                     r"by default|please (always|never)|don'?t ever|stop (using|doing|adding))\b")
@@ -99,8 +101,7 @@ def depth_default() -> str:
     return _top("depth", 3)
 
 
-def summary() -> str:
-    """A short block for the model's system prompt; empty until there is something real to say."""
+def _bits() -> list:
     bits = []
     if _top("formats"):
         bits.append(f"usually wants documents as {_top('formats').upper()}")
@@ -109,13 +110,18 @@ def summary() -> str:
     folders = [f for f, n in Counter(DATA["folders"]).most_common(2) if n >= 2]
     if folders:
         bits.append("often works with files in " + " and ".join(folders))
-    topics = [t for t, n in Counter(DATA["topics"]).most_common(5) if n >= 3]
+    topics = [t for t, n in Counter(DATA["topics"]).most_common(8) if n >= 3 and t not in STOP][:5]
     if topics:
         bits.append("keeps coming back to: " + ", ".join(topics))
     o = DATA["offers"]
     if o["yes"] + o["no"] >= 4:
         bits.append("often takes your suggestions" if o["yes"] >= o["no"] else "rarely takes your suggestions, so offer less")
-    out = ""
+    return bits
+
+
+def summary() -> str:
+    """A short block for the model's system prompt; empty until there is something real to say."""
+    bits, out = _bits(), ""
     if bits:
         out += "What you have learned about this user from using it together: " + "; ".join(bits) + ". "
     if DATA["notes"]:
@@ -124,8 +130,12 @@ def summary() -> str:
 
 
 def describe() -> str:
-    s = summary()
-    return s if s else "I haven't picked up anything about your habits yet. I learn as you use me."
+    """What /prefs shows the user: the same facts as summary(), worded for them."""
+    bits = [b.replace("your suggestions", "my suggestions").replace("you offer", "I offer").replace("offer less", "I'll suggest less") for b in _bits()]
+    lines = [f"  - {b[0].upper()}{b[1:]}" for b in bits] + [f"  - You told me: \"{n}\"" for n in DATA["notes"]]
+    if not lines:
+        return "I haven't picked up anything about your habits yet. I learn as you use me."
+    return "Here's what I've picked up about you (all stored on this machine; /prefs clear forgets it):\n" + "\n".join(lines)
 
 
 def clear():
