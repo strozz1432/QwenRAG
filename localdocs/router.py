@@ -56,6 +56,7 @@ Examples:
 "sure, go ahead" (after: "Want me to summarise the top one?") -> {{"action":"sum","format":"","target":"the top file just listed","request":"","query":"","position":"","count":"","intent":"The user wants the top listed file summarised."}}
 "what did I write about the sequence model" -> {{"action":"docs","format":"","target":"","request":"","query":"sequence model","position":"","count":"","depth":"","intent":"The user wants to know what their files say about the sequence model."}}
 "what's a pdf" -> {{"action":"chat","format":"","target":"","request":"","query":"","position":"","count":"","depth":"","intent":"The user asks what a PDF is."}}
+"what else" (right after the assistant listed what it has learned about the user) -> {{"action":"chat","format":"","target":"","request":"","query":"","position":"","count":"","depth":"","intent":"The user asks whether there is more to what was just shown."}}
 "ok" -> {{"action":"chat","format":"","target":"","request":"","query":"","position":"","count":"","depth":"","intent":"The user acknowledges."}}
 "which documents relate to invoices" -> {{"action":"find","format":"","target":"","request":"invoices","query":"","position":"","count":"","depth":"","intent":"The user wants the documents related to invoices."}}
 "how many files do you know about" -> {{"action":"files","format":"","target":"","request":"","query":"","position":"","count":""}}

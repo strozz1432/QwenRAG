@@ -228,7 +228,9 @@ async def turn(text: str):
                 prefs.clear()
                 emit("✓ Forgotten. I'll start learning again from scratch.\n\n")
             else:
-                emit(prefs.describe() + "\n\n")
+                shown = prefs.describe()
+                emit(shown + "\n\n")
+                remember("What have you learned about me?", shown)   # so a follow-up like "what else" has something to refer to
             return
         if cmd == "/files":
             return show_files(arg.strip() == "all")
