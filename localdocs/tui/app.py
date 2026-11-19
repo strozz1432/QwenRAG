@@ -21,7 +21,7 @@ from .doc_commands import add_doc, write_doc
 from .file_commands import find_relevant, look_files
 from .flow import PACE, set_progress, step, stream_reply
 from .. import config
-from ..llm import installed_models
+from ..llm import cloud_models, display, installed_models, is_cloud, privacy_line, tag, usable
 from ..config import COMMANDS, EMBED, FORMAT, OLLAMA, STEER_MARK
 from ..llm import check_ollama
 from ..retrieval import MEMORY, build_summary, remember, retrieve
@@ -59,7 +59,7 @@ async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
         return
     names = sorted({Path(c[0]).name for c in top})
     context = "\n\n".join(f"[{Path(c[0]).name}]\n{c[2]}" for c in top)
-    step("Reading the matches", f"ollama.chat {config.LLM} · answering from {len(top)} chunks", 0.4,
+    step("Reading the matches", f"{tag()} · answering from {len(top)} chunks", 0.4,
          note=f"Found it in {', '.join(names[:3])}{' and more' if len(names) > 3 else ''}")
     reply = await stream_reply([{"role": "system", "content": activity_context()}, *MEMORY, {"role": "user", "content":
         "Answer the question using only the context below. If the answer is not there, say so "
@@ -80,7 +80,7 @@ async def summarise(arg: str):
         emit(info["msg"])
         record(f"Tried to summarise '{arg}': {info['msg'].splitlines()[0]}", False)
         return
-    step("Writing the summary", f"ollama.chat {config.LLM} · writing the final summary", 0.7,
+    step("Writing the summary", f"{tag()} · writing the final summary", 0.7,
          note="Putting the summary together")
     reply = await stream_reply([{"role": "user", "content": info["prompt"]}], start=0.7)
     remember(f"Summarise {info['name']}", reply)
@@ -136,7 +136,7 @@ def clear_chat():
     MEMORY.clear()
     reset_activity()
     S.text, S.rows_key, S.follow = "", None, True
-    emit(f"◆ Local Docs · {config.LLM} · private, on-device\n✓ Conversation cleared.\n")
+    emit(f"◆ Local Docs · {display()} · {privacy_line()}\n✓ Conversation cleared.\n")
 
 
 def plan_from_words(d: dict, text: str):
@@ -206,14 +206,22 @@ async def turn(text: str):
         if cmd == "/clear":
             return clear_chat()
         if cmd == "/model":
-            name, models = arg.strip(), installed_models()
+            name = arg.strip()
             if not name:
-                emit("Installed models (type /model and pick one):\n" + "\n".join(f"  {'●' if m == config.LLM else ' '} {m}" for m in models) + "\n\n")
-            elif name not in models:
-                emit(f"! '{name}' isn't installed. Installed: {', '.join(models) or 'none found'}\n\n")
+                models = installed_models() + cloud_models()
+                emit("Models (type /model and pick one; cloud ones are ☁ and need an API key):\n" + "\n".join(f"  {'●' if m == config.LLM else ' '} {m}" for m in models)
+                     + "\n  Other cloud models: /model openai:<model> or /model anthropic:<model>\n\n")
+                return
+            problem = usable(name)
+            if problem:
+                emit(f"! {problem}\n\n")
+                return
+            prefs.set_model(name)
+            if is_cloud(name):
+                emit(f"✓ Now using ☁ {name}.\n! Questions and the passages of your files they use are now sent to that provider. "
+                     "Type /model <local model> to go back to on-device.\n\n")
             else:
-                prefs.set_model(name)
-                emit(f"✓ Now using {name}.\n\n")
+                emit(f"✓ Now using {name} (on-device).\n\n")
             return
         if cmd == "/prefs":
             if arg.strip() == "clear":
@@ -392,7 +400,7 @@ async def main():
         write("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h")
         loop.add_reader(fd, on_stdin)
         loop.add_signal_handler(signal.SIGWINCH, lambda: setattr(S, "dirty", True))
-        emit(f"◆ Local Docs · {config.LLM} · private, on-device\n")
+        emit(f"◆ Local Docs · {display()} · {privacy_line()}\n")
         asyncio.ensure_future(startup())
         render = asyncio.ensure_future(render_loop())
         asyncio.ensure_future(worker())

@@ -7,7 +7,7 @@ import subprocess
 import time
 from .. import config
 from ..config import COMMANDS
-from ..llm import installed_models
+from ..llm import cloud_models, installed_models
 from ..store import FILE_NAMES
 from .render import build_rows, row_plain
 from .state import S, term_size, write
@@ -89,7 +89,7 @@ def compute_menu():
         S.menu_prefix = "/add "
     elif b.startswith("/model "):
         frag = b[7:].lower()
-        S.menu = [(n, "current" if n == config.LLM else "", n) for n in installed_models() if frag in n.lower()]
+        S.menu = [(n, "current" if n == config.LLM else "", n) for n in installed_models() + cloud_models() if frag in n.lower()]
         S.menu_prefix = "/model "
     else:
         S.menu = []

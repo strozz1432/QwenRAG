@@ -9,6 +9,7 @@ from ..retrieval import MEMORY
 from ..authoring import (DRAFT_RULES, gather_context, new_path, parse_write, resolve_target, split_add, tidy)
 from .. import config
 from ..docwriter import write_document
+from ..llm import tag
 from .. import activity
 from ..activity import record
 from ..retrieval import remember
@@ -61,7 +62,7 @@ async def write_doc(arg: str, natural: bool = False, query: str | None = None):
         context = "\n\n".join(x for x in (earlier(natural), context) if x)
         if context:
             emit("· Using the earlier chat and your files\n")
-        step("Drafting", f"ollama.chat {config.LLM} · drafting the document", 0.3, note="Drafting")
+        step("Drafting", f"{tag()} · drafting the document", 0.3, note="Drafting")
         md = await _draft("You are a careful writer producing a document for the user. " + DRAFT_RULES, request, context)
     if not md:
         emit("\n! The model returned nothing, so nothing was saved.\n")
@@ -95,7 +96,7 @@ async def add_doc(arg: str, natural: bool = False, query: str | None = None, at_
     existing = await asyncio.to_thread(read_text, path)
     context = await asyncio.to_thread(gather_context, request, 7000, query)
     context = "\n\n".join(x for x in (earlier(natural), context) if x)
-    step("Drafting", f"ollama.chat {config.LLM} · drafting the addition", 0.3, note="Writing the addition")
+    step("Drafting", f"{tag()} · drafting the addition", 0.3, note="Writing the addition")
     if at_start:
         system = ("You are adding something to the START of an existing document, such as a title or short intro. "
                   "Write ONLY that new text, as briefly as the request allows (a title is one line starting with '# '). "

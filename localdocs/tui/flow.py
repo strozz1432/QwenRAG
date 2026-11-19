@@ -2,13 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 
-from .. import config
-from ..config import NUM_CTX
-from ..llm import _post
+from ..llm import stream_chat, tag
 from .state import S, emit
 
 PACE = 0.7  # seconds between activity lines
@@ -71,19 +68,10 @@ async def _stream_once(messages, applied: int):
 
     def worker():
         try:
-            body = {"model": config.LLM, "messages": messages, "stream": True, "think": False, "keep_alive": "30m",
-                    "options": {"num_ctx": NUM_CTX, "repeat_penalty": 1.15, "num_predict": 2000}}
-            with _post("/api/chat", body) as r:
-                holder.append(r)
-                for line in r:
-                    if cancel.is_set():
-                        break
-                    part = json.loads(line)
-                    tok = part.get("message", {}).get("content", "")
-                    if tok:
-                        loop.call_soon_threadsafe(q.put_nowait, tok)
-                    if part.get("done"):
-                        break
+            for tok in stream_chat(messages, holder):
+                if cancel.is_set():
+                    break
+                loop.call_soon_threadsafe(q.put_nowait, tok)
         except Exception as e:
             if not cancel.is_set():
                 loop.call_soon_threadsafe(q.put_nowait, e)
@@ -110,7 +98,7 @@ async def _stream_once(messages, applied: int):
                 S.label, S.progress, first = "Writing the answer", None, False  # writing isn't compute: no bar
                 emit("\n")
             n += 1
-            S.detail = f"ollama.chat {config.LLM} · streaming · {n} tokens"
+            S.detail = f"{tag()} · streaming · {n} tokens"
             full.append(tok)
             emit(tok)
             if n % 150 == 0 and looping("".join(full)):  # the model got stuck repeating itself: stop it

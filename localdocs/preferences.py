@@ -27,6 +27,9 @@ def load():
     try:
         DATA.update(json.loads(PATH.read_text()))
         config.LLM = DATA.get("model") or config.LLM
+        from .llm import api_key, split   # a saved cloud model without its key falls back to the local default
+        if split(config.LLM)[0] != "ollama" and not api_key(split(config.LLM)[0]):
+            config.LLM = config.DEFAULT_LLM
     except Exception:
         pass
 

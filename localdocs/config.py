@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-LLM = "qwen3:8b"
+DEFAULT_LLM = "qwen3:8b"
+LLM = DEFAULT_LLM   # the active model; "anthropic:<model>" / "openai:<model>" select a cloud API (see llm.py)
 EMBED = "qwen3-embedding:0.6b"
 OLLAMA = "http://localhost:11434"
 ROOTS = [Path.home() / d for d in ("Documents", "Desktop", "Downloads")]
 EXTS = {".pdf", ".docx", ".txt", ".md"}
+OCR_LANGS = "eng"        # Tesseract language(s), e.g. "eng+fra"; each must be installed (`tesseract --list-langs`)
+OCR_MAX_PAGES = 40       # scanned PDF pages read by OCR per file (OCR is slower than normal text extraction)
+OCR_MIN_PIXELS = 60      # skip pictures smaller than this on their short side
+OCR_TIMEOUT = 60         # seconds per page or picture
 SKIP_SUFFIXES = (".app", ".jdk", ".egg-info", ".xcassets", ".framework", ".xcodeproj")  # bundles and library folders, not your documents
 SKIP_DIRS = {"Pods", "DerivedData", "build", "dist", "venv", ".venv", "node_modules", ".git", "site-packages", "chroma_db", "Library"}
 MAX_BYTES = 30 * 1024 * 1024

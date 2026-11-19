@@ -11,6 +11,7 @@ from pathlib import Path
 from .config import CHUNK, OVERLAP
 from .config import DB_PATH, EMBED, EXTS, MAX_BYTES, ROOTS, SKIP_DIRS, SKIP_SUFFIXES
 from .llm import embed
+from . import ocr
 
 # ---------------------------------------------------------------- vector store
 
@@ -61,6 +62,7 @@ def search(qvec, k: int = 5) -> list:
 
 
 def find_files():
+    ocr_on = ocr.available()     # pictures are only worth listing when there's an OCR engine to read them
     for root in ROOTS:
         if not root.exists():
             continue
@@ -77,7 +79,7 @@ def find_files():
                 if p.is_dir():
                     if p.name not in SKIP_DIRS and not p.name.endswith(SKIP_SUFFIXES):
                         stack.append(p)
-                elif p.suffix.lower() in EXTS and not p.name.startswith("~$"):
+                elif (p.suffix.lower() in EXTS or (p.suffix.lower() in ocr.IMAGE_EXTS and ocr_on)) and not p.name.startswith("~$"):
                     try:
                         if p.stat().st_size <= MAX_BYTES:
                             yield p
@@ -88,8 +90,9 @@ def find_files():
 def read_text(p: Path) -> str:
     s = p.suffix.lower()
     if s == ".pdf":
-        from pypdf import PdfReader  # the one third-party dependency
-        return "\n".join((pg.extract_text() or "") for pg in PdfReader(str(p)).pages)
+        return ocr.read_pdf(p)       # embedded text, plus OCR for scanned pages
+    if s in ocr.IMAGE_EXTS:
+        return ocr.read_image(p)
     if s == ".docx":
         with zipfile.ZipFile(p) as z:
             xml = z.read("word/document.xml").decode("utf8", "ignore")
@@ -109,6 +112,11 @@ def chunks(text: str):
 def index(progress=None) -> int:
     files = list(find_files())
     seen = {str(p) for p in files}
+    db.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    was = (db.execute("SELECT v FROM meta WHERE k='ocr'").fetchone() or ["0"])[0]
+    if ocr.available() and was != "1":   # OCR just became available: retry files that came out empty before
+        db.execute("DELETE FROM files WHERE path NOT IN (SELECT DISTINCT path FROM chunks)")
+    db.execute("INSERT OR REPLACE INTO meta VALUES('ocr', ?)", ("1" if ocr.available() else "0",))
     known = dict(db.execute("SELECT path, mtime FROM files"))
     for gone in set(known) - seen:
         db.execute("DELETE FROM chunks WHERE path=?", (gone,))
