@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from localdocs import config, keys, llm, ocr, store   # noqa: E402
+from localdocs import pdfindex   # noqa: E402
 
 
 class Resp(io.BytesIO):
@@ -143,6 +144,68 @@ def test_ocr():
         img.save(Path(d) / "a.pdf")
         for name in ("a.png", "a.pdf"):
             assert "Order 5521 arrives Friday" in store.read_text(Path(d) / name), name
+
+
+def make_pdf(path, pages, bookmarks=()):
+    """pages: text per page. bookmarks: (page, title, level) with 1-based pages and 0-based levels."""
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path))
+    marks = {}
+    for page, title, level in bookmarks:
+        marks.setdefault(page, []).append((title, level))
+    for n, text in enumerate(pages, 1):
+        for i, (title, level) in enumerate(marks.get(n, [])):
+            key = f"b{n}_{i}"
+            c.bookmarkPage(key)
+            c.addOutlineEntry(title, key, level)
+        c.drawString(72, 700, text)
+        c.showPage()
+    c.save()
+
+
+def _spans(entries):
+    return [(e.start, e.end) for e in entries]
+
+
+def test_bookmark_index():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, [f"page {i} marker" for i in range(1, 7)],
+                 [(1, "Intro", 0), (2, "Setup", 1), (4, "Usage", 0), (6, "Appendix", 0)])
+        idx = pdfindex.bookmark_index(p)
+        assert [e.title for e in idx] == ["Intro", "Setup", "Usage", "Appendix"]
+        assert [e.level for e in idx] == [0, 1, 0, 0]
+        assert _spans(idx) == [(1, 1), (2, 3), (4, 5), (6, 6)]
+
+
+def test_bookmark_index_out_of_order_and_same_page():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, [f"page {i}" for i in range(1, 6)],
+                 [(4, "Usage", 0), (1, "Intro", 0), (4, "Extra", 0)])
+        idx = pdfindex.bookmark_index(p)
+        assert sorted(e.start for e in idx) == [e.start for e in idx] == [1, 4, 4]
+        assert idx[0].end == 3
+        assert idx[1].end == 4 and idx[2].end == 5
+
+
+def test_bookmark_index_none():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, ["one", "two"])
+        assert pdfindex.bookmark_index(p) == []
+        junk = Path(d) / "junk.pdf"
+        junk.write_bytes(b"not a pdf at all")
+        assert pdfindex.bookmark_index(junk) == []
+
+
+def test_read_pages():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, ["alpha one", "bravo two", "charlie three", "delta four"])
+        text = pdfindex.read_pages(p, 2, 3)
+        assert "bravo two" in text and "charlie three" in text
+        assert "alpha one" not in text and "delta four" not in text
 
 
 if __name__ == "__main__":
