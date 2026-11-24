@@ -9,6 +9,7 @@ import shutil
 import signal
 import sys
 import termios
+import threading
 import time
 import tty
 from pathlib import Path
@@ -79,10 +80,12 @@ async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
 async def summarise(arg: str):
     step("Finding the file", f"looking for '{arg}'", 0.05, note=f"Looking for {arg}")
     await asyncio.sleep(PACE)
-    def choose(entries, source):    # runs in the worker thread; the checklist lives on the UI loop
-        return asyncio.run_coroutine_threadsafe(picker.ask(entries, source), S.loop).result()
-
-    info = await asyncio.to_thread(build_summary, arg, set_progress, None, choose)
+    cancelled = threading.Event()      # set if this job is interrupted while the worker thread is still running
+    try:
+        info = await asyncio.to_thread(build_summary, arg, set_progress, None, picker.chooser(cancelled))
+    except asyncio.CancelledError:
+        cancelled.set()
+        raise
     if "msg" in info:
         emit(info["msg"])
         record(f"Tried to summarise '{arg}': {info['msg'].splitlines()[0]}", False)

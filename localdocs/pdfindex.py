@@ -17,13 +17,18 @@ class Entry:
     end: int
 
 
+def clean_title(title: str) -> str:
+    """A heading with control characters (newlines, tabs, terminal escapes) turned into spaces."""
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", title)).strip()
+
+
 def _with_ends(raw: list, page_count: int) -> list:
     """(level, title, start) triples -> Entry list sorted by start page, each ending where the next begins."""
     raw = sorted(raw, key=lambda r: r[2])
     out = []
     for i, (level, title, start) in enumerate(raw):
         nxt = raw[i + 1][2] - 1 if i + 1 < len(raw) else page_count
-        out.append(Entry(level, title, start, max(start, min(nxt, page_count))))
+        out.append(Entry(level, clean_title(title), start, max(start, min(nxt, page_count))))
     return out
 
 
@@ -59,8 +64,12 @@ CALIBRATE_SCAN = 40      # and look for the first heading in the pages after it
 _CACHE: dict = {}        # (path, mtime) -> (entries, source)
 
 
-def _page_text(path: Path, n: int) -> str:
-    return ocr.read_pdf(path, range(n - 1, n))
+def _embedded_text(reader, n: int) -> str:
+    """Text a PDF itself carries for page n (1-based). No OCR: finding the contents page must stay cheap."""
+    try:
+        return reader.pages[n - 1].extract_text() or ""
+    except Exception:
+        return ""
 
 
 def _looks_like_list(text: str) -> bool:
@@ -72,10 +81,11 @@ def contents_index(path: Path, ask=None) -> list:
     """Parse a printed 'Contents' page into an index. [] unless the page numbers can be matched to real pages."""
     try:
         from pypdf import PdfReader
-        count = len(PdfReader(str(path)).pages)
+        reader = PdfReader(str(path))
+        count = len(reader.pages)
         found = None
         for n in range(1, min(count, CONTENTS_SCAN) + 1):
-            text = _page_text(path, n)
+            text = _embedded_text(reader, n)
             if any(re.fullmatch(r"(table of )?contents[\s.:]*", l.strip(), re.I) for l in text.splitlines()):
                 found = (n, text)
                 break
@@ -83,7 +93,7 @@ def contents_index(path: Path, ask=None) -> list:
             return []
         at, text = found
         if at < count:
-            nxt = _page_text(path, at + 1)
+            nxt = _embedded_text(reader, at + 1)
             if _looks_like_list(nxt):
                 text += "\n" + nxt
         if ask is None:
@@ -104,7 +114,7 @@ def contents_index(path: Path, ask=None) -> list:
         first_title, first_page = raw[0][1].lower(), raw[0][2]
         offset = None
         for n in range(at + 1, min(count, at + CALIBRATE_SCAN) + 1):
-            if first_title in _page_text(path, n)[:200].lower():
+            if first_title in _embedded_text(reader, n)[:200].lower():
                 offset = n - first_page
                 break
         if offset is None or offset < 0 or any(r[2] + offset > count for r in raw):

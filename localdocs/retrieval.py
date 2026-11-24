@@ -156,12 +156,22 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None, 
     figures = _describe_figures(path, progress) if is_pdf and not sections else ""
     focus = ""
     if sections:
-        size, groups = config.CHUNK * 4, []
-        for e in sections:
-            text = pdfindex.read_pages(Path(path), e.start, e.end)
-            for j in range(0, max(len(text), 1), size):
+        size, groups, empty = config.CHUNK * 4, [], []
+        for k, e in enumerate(sections):
+            if progress:
+                progress(f"reading {e.title}", 0.1 + 0.05 * k / len(sections), "Reading the sections", None)
+            text = pdfindex.read_pages(Path(path), e.start, e.end).strip()
+            if not text:                 # scanned and unreadable: never hand the model a bare heading to invent from
+                empty.append(e.title)
+                continue
+            for j in range(0, len(text), size):
                 groups.append(f"## {e.title}{' (continued)' if j else ''}\n{text[j:j + size]}")
+        if not groups:
+            return {"msg": f"The ticked sections ({', '.join(empty)}) have no readable text. If the PDF is scanned, "
+                           "install Tesseract so I can read it, then try again.\n\n"}
         focus = "This is only some sections of a larger document. Give each section its own short heading, using the section titles. "
+        if empty:
+            focus += f"There was no readable text for: {', '.join(empty)}. Say so in one line for those sections instead of describing them. "
     else:
         groups = ["\n".join(parts[i:i + 4]) for i in range(0, len(parts), 4)]
     if figures:

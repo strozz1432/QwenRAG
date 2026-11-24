@@ -358,6 +358,18 @@ def _summary(entries, choose, source="bookmarks"):
             return retrieval.build_summary("book.pdf", choose=wrapped if choose else None), calls
 
 
+def _summary_with_texts(texts, chosen):
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "book.pdf"
+        make_pdf(p, ["x"])
+        with mock.patch.object(retrieval, "indexed_paths", return_value=[str(p)]), \
+             mock.patch.object(retrieval, "CHUNKS", [(str(p), 0, "WHOLE", None)]), \
+             mock.patch.object(retrieval, "chat", side_effect=lambda prompt, **k: "note"), \
+             mock.patch.object(pdfindex, "get_index", return_value=(_three(), "bookmarks")), \
+             mock.patch.object(pdfindex, "read_pages", side_effect=lambda path, a, b: texts[a]):
+            return retrieval.build_summary("book.pdf", choose=lambda e, s: chosen), None
+
+
 def _three():
     return [pdfindex.Entry(0, f"Section {i}", i + 1, i + 1) for i in range(3)]
 
@@ -393,6 +405,55 @@ def test_summary_without_chooser_is_unchanged():
 def test_summary_notes_a_detected_index():
     info, _ = _summary(_three(), lambda e, s: [0], source="contents page")
     assert "contents page" in info["note"]
+
+
+def test_chooser_refuses_once_the_job_was_cancelled():
+    import threading
+    cancelled = threading.Event()
+    choose = picker.chooser(cancelled)
+    cancelled.set()
+    S.loop = None                                     # opening a checklist would fail loudly
+    assert choose(_three(), "bookmarks") is None
+
+
+def test_contents_scan_reads_embedded_text_only():
+    with tempfile.TemporaryDirectory() as d:
+        p = _contents_pdf(d)
+        reply = '[{"title":"Intro","page":1},{"title":"Setup","page":3}]'
+        with mock.patch.object(ocr, "read_pdf", side_effect=AssertionError("OCR used while detecting the index")):
+            idx = pdfindex.contents_index(p, ask=lambda prompt: reply)
+        assert [e.start for e in idx] == [3, 5]
+
+
+def test_summary_reports_progress_while_reading_sections():
+    log = []
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "book.pdf"
+        make_pdf(p, ["x"])
+        with mock.patch.object(retrieval, "indexed_paths", return_value=[str(p)]), \
+             mock.patch.object(retrieval, "CHUNKS", [(str(p), 0, "WHOLE", None)]), \
+             mock.patch.object(pdfindex, "get_index", return_value=(_three(), "bookmarks")), \
+             mock.patch.object(pdfindex, "read_pages", side_effect=lambda path, a, b: log.append(("read", a)) or f"text {a}"):
+            retrieval.build_summary("book.pdf", progress=lambda *a: log.append(("progress", a[2] if len(a) > 2 else "", a[0])),
+                                    choose=lambda e, s: [0, 2])
+    reads = [i for i, x in enumerate(log) if x[0] == "read"]
+    assert len(reads) == 2
+    for i in reads:   # right before each read, the status names the section being read, not "Waiting for your pick"
+        before = log[i - 1]
+        assert before[0] == "progress" and before[1] == "Reading the sections" and "Section" in before[2]
+
+
+def test_summary_does_not_invent_empty_sections():
+    info, _ = _summary_with_texts({1: "  ", 2: "BBB text", 3: "CCC"}, [0, 1])
+    assert "BBB text" in info["prompt"] and "Section 0" in info["prompt"] and "no readable text" in info["prompt"].lower()
+    assert "## Section 0\n" not in info["prompt"]
+    info, _ = _summary_with_texts({1: "", 2: "\n", 3: "CCC"}, [0, 1])
+    assert "no readable text" in info["msg"].lower()
+
+
+def test_index_titles_have_no_control_characters():
+    e = pdfindex._with_ends([(0, "Bad\x1b]0;pwn\x07\nTitle\t!", 1)], 1)[0]
+    assert not any(ord(c) < 32 or 127 <= ord(c) < 160 for c in e.title) and "Title" in e.title
 
 
 if __name__ == "__main__":

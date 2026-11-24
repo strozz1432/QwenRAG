@@ -83,3 +83,13 @@ async def ask(entries: list, label: str):
         return await fut
     finally:
         S.picker, S.dirty = None, True
+
+
+def chooser(cancelled):
+    """The `choose` callback for build_summary (which runs in a worker thread). Once `cancelled` is set (the user
+    interrupted the job while the thread was still busy) it never opens a checklist for a job that is already over."""
+    def choose(entries: list, label: str):
+        if cancelled.is_set():
+            return None
+        return asyncio.run_coroutine_threadsafe(ask(entries, label), S.loop).result()
+    return choose
