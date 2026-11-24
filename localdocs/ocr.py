@@ -65,11 +65,14 @@ def is_figure(img) -> bool:
     return min(img.size) >= FIGURE_MIN_PIXELS
 
 
-def read_pdf(path: Path) -> str:
-    """Text of a PDF: the embedded text, OCR of scanned pages, and any text inside figures on the other pages."""
+def read_pdf(path: Path, pages_wanted: range | None = None) -> str:
+    """Text of a PDF: the embedded text, OCR of scanned pages, and any text inside figures on the other pages.
+    `pages_wanted` is a range of 0-based page indexes; the default is every page."""
     from pypdf import PdfReader
     pages, scanned, figures = [], 0, 0
     for n, pg in enumerate(PdfReader(str(path)).pages, 1):
+        if pages_wanted is not None and (n - 1) not in pages_wanted:
+            continue
         text = (pg.extract_text() or "").strip()
         if not available():
             pages.append(text)

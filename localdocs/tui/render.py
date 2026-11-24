@@ -268,6 +268,10 @@ def status_rows():
 def draw():
     S.dirty = False
     W, lines = term_size()
+    if S.picker:
+        from .picker import picker_rows
+        write("\x1b[?25l" + "".join(f"\x1b[{i + 1};1H{r}\x1b[K" for i, r in enumerate(picker_rows(S.picker, W, lines))))
+        return
     rows = build_rows(W)
     total = len(rows)
     q = 1 if (S.pending and S.follow) else 0
