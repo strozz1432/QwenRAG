@@ -456,6 +456,42 @@ def test_index_titles_have_no_control_characters():
     assert not any(ord(c) < 32 or 127 <= ord(c) < 160 for c in e.title) and "Title" in e.title
 
 
+def _notes(entries, source, choose):
+    """The activity lines build_summary writes into the conversation, in order."""
+    notes = []
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "book.pdf"
+        make_pdf(p, ["x"])
+        with mock.patch.object(retrieval, "indexed_paths", return_value=[str(p)]), \
+             mock.patch.object(retrieval, "CHUNKS", [(str(p), 0, "WHOLE FILE TEXT", None)]), \
+             mock.patch.object(retrieval, "chat", side_effect=lambda prompt, **k: "note"), \
+             mock.patch.object(pdfindex, "get_index", return_value=(entries, source)), \
+             mock.patch.object(pdfindex, "read_pages", side_effect=lambda path, a, b: "text " * 600 * a):
+            retrieval.build_summary("book.pdf", progress=lambda *a: a[3:4] and a[3] and notes.append(a[3]), choose=choose)
+    return notes
+
+
+def _order(notes, *needles):
+    at = []
+    for n in needles:
+        hit = [i for i, line in enumerate(notes) if n in line]
+        assert hit, f"no activity line with {n!r} in {notes}"
+        at.append(hit[0])
+    assert at == sorted(at), f"out of order: {notes}"
+
+
+def test_activity_lines_show_index_then_pick_then_chunking():
+    notes = _notes(_three(), "bookmarks", lambda e, s: [1, 2])
+    _order(notes, "Checking the PDF for an index", "Found an index", "Picked 2 of 3", "Chunked", "Key points, part 1")
+    assert any("bookmarks" in n and "3 sections" in n for n in notes)
+
+
+def test_activity_lines_when_there_is_no_index():
+    notes = _notes([], "", lambda e, s: [0])
+    _order(notes, "Checking the PDF for an index", "No index found", "Read it all")
+    assert not any("Found an index" in n or "Picked" in n for n in notes)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

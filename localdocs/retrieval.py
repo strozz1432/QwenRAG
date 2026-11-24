@@ -96,6 +96,10 @@ def _summarise_picture(path: str, progress, note) -> dict:
             "name": short, "note": note}
 
 
+def _n(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
 def build_summary(fragment: str, progress=None, forced_note: str | None = None, choose=None) -> dict:
     """Return {'msg': ...} on failure, else {'prompt', 'name', 'note'} ready to stream.
     `choose(entries, source) -> list[int] | None` lets the user pick which sections of a PDF with an index to summarise."""
@@ -141,18 +145,24 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None, 
     is_pdf = Path(path).suffix.lower() == ".pdf"
     sections = None                      # the ticked sections, when the user picked part of a PDF's index
     if choose and is_pdf:
+        if progress:
+            progress("looking for an index", 0.08, "Looking for an index", "Checking the PDF for an index")
         entries, source = pdfindex.get_index(Path(path))
         if len(entries) >= 2:
             if progress:
-                progress("waiting for your pick", 0.1, "Waiting for your pick",
-                         "This PDF has an index. Pick the sections you want summarised")
+                progress("waiting for your pick", 0.09, "Waiting for your pick",
+                         f"Found an index ({source}): {len(entries)} sections. Pick the ones you want summarised")
             picked = choose(entries, source)
             if picked is None:
                 return {"msg": "Cancelled, nothing summarised.\n\n"}
             if source == "contents page":
                 note = (note + " " if note else "") + "(index detected from the contents page)"
+            if progress:
+                progress("sections picked", 0.1, "Reading the sections", f"Picked {len(picked)} of {len(entries)} sections")
             if set(picked) != set(range(len(entries))):
                 sections = [entries[i] for i in sorted(picked)]
+        elif progress:
+            progress("no index", 0.1, "Reading the file", "No index found, so I'll read the whole document")
     figures = _describe_figures(path, progress) if is_pdf and not sections else ""
     focus = ""
     if sections:
@@ -177,10 +187,10 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None, 
     if figures:
         groups.append(figures)
     if progress:
-        progress(f"reading {Path(path).name}", 0.09, "Reading the file", "Reading it")
-        progress(f"{len(parts)} passages", 0.1, "Reading the file",
-                 (f"Read {len(sections)} sections" if sections else f"Read it all ({len(parts)} passages)") +
-                 (f", in {len(groups)} parts" if len(groups) > 1 else ""))
+        progress(f"reading {Path(path).name}", 0.1, "Reading the file", None)
+        progress(f"{len(groups)} parts", 0.1, "Chunking",
+                 (f"Chunked {_n(len(sections), 'section')} into {_n(len(groups), 'part')}" if sections
+                  else f"Read it all ({_n(len(parts), 'passage')})" + (f", chunked into {len(groups)} parts" if len(groups) > 1 else "")))
     if len(groups) <= 1:
         prompt = f"Summarise this document clearly and concisely. {focus}{SUMMARY_FORMAT}\n\n{groups[0] if groups else ''}"
     else:
