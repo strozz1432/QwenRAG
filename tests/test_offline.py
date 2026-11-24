@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from localdocs import config, keys, llm, ocr, store   # noqa: E402
-from localdocs import pdfindex   # noqa: E402
+from localdocs import pdfindex, retrieval   # noqa: E402
 from localdocs.tui import picker   # noqa: E402
 from localdocs.tui.state import S   # noqa: E402
 
@@ -338,6 +338,61 @@ def test_picker_owns_the_keyboard():
         assert S.stop.is_set()                       # ctrl-c still quits
     finally:
         S.picker, S.busy, S.current = None, False, None
+
+
+def _summary(entries, choose, source="bookmarks"):
+    """Run build_summary on a real one-file store with a fake index; returns (result, choose calls)."""
+    calls = []
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "book.pdf"
+        make_pdf(p, ["x"])
+        texts = {1: "AAA text", 2: "BBB text", 3: "CCC text"}
+        with mock.patch.object(retrieval, "indexed_paths", return_value=[str(p)]), \
+             mock.patch.object(retrieval, "CHUNKS", [(str(p), 0, "WHOLE FILE TEXT", None)]), \
+             mock.patch.object(retrieval, "chat", side_effect=lambda prompt, **k: "note"), \
+             mock.patch.object(pdfindex, "get_index", return_value=(entries, source)), \
+             mock.patch.object(pdfindex, "read_pages", side_effect=lambda path, a, b: texts[a]):
+            def wrapped(*a):
+                calls.append(a)
+                return choose(*a)
+            return retrieval.build_summary("book.pdf", choose=wrapped if choose else None), calls
+
+
+def _three():
+    return [pdfindex.Entry(0, f"Section {i}", i + 1, i + 1) for i in range(3)]
+
+
+def test_summary_uses_only_chosen_sections():
+    info, calls = _summary(_three(), lambda entries, source: [1])
+    assert "BBB text" in info["prompt"] and "Section 1" in info["prompt"]
+    assert "AAA" not in info["prompt"] and "CCC" not in info["prompt"] and "WHOLE FILE" not in info["prompt"]
+    assert calls and calls[0][1] == "bookmarks"
+
+
+def test_summary_all_ticked_is_whole_file():
+    info, _ = _summary(_three(), lambda entries, source: [0, 1, 2])
+    assert "WHOLE FILE TEXT" in info["prompt"] and "AAA" not in info["prompt"]
+
+
+def test_summary_cancel():
+    info, _ = _summary(_three(), lambda entries, source: None)
+    assert "Cancelled" in info["msg"]
+
+
+def test_summary_no_index_or_single_entry_skips_picker():
+    for entries in ([], _three()[:1]):
+        info, calls = _summary(entries, lambda e, s: [0])
+        assert calls == [] and "WHOLE FILE TEXT" in info["prompt"]
+
+
+def test_summary_without_chooser_is_unchanged():
+    info, calls = _summary(_three(), None)
+    assert "WHOLE FILE TEXT" in info["prompt"]
+
+
+def test_summary_notes_a_detected_index():
+    info, _ = _summary(_three(), lambda e, s: [0], source="contents page")
+    assert "contents page" in info["note"]
 
 
 if __name__ == "__main__":

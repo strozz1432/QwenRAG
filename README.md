@@ -7,6 +7,7 @@ A private, terminal-based assistant for the documents on your computer. Ask ques
 - **Ask your files.** Questions are answered from your PDFs, Word docs, Markdown and text files, using retrieval over a local vector index.
 - **Plain-language routing.** You don't need commands. "Summarise my Mouser order" or "what's the VAT on the invoice?" is routed to the right action. Greetings and general questions skip the document search.
 - **Summaries, skimming and multi-file reads.** Read one file or several, each shown in its own box.
+- **Summarise by section.** When a PDF has an index (its bookmarks, or failing that its printed contents page), a checklist opens: ↑↓ to move, space to tick (ticking a chapter ticks its sub-sections), `a` for all, enter to summarise only the ticked sections, esc to cancel. PDFs with no usable index are summarised whole.
 - **Write and edit.** Create new PDF, DOCX, Markdown or text files, or append to existing ones. Backups are kept when you add to a file.
 - **Learns your habits.** It remembers the folders, topics and answer styles you use and adjusts. `/prefs` shows what it has learned, and `/prefs clear` forgets it.
 - **Terminal UI.** Markdown and table rendering, tab completion, drag-to-select with copy, a live activity log, a message queue, and `/steer` to redirect a running task.
@@ -148,6 +149,7 @@ localdocs/
   config.py         settings, prompts, command list
   store.py          SQLite vector store, scanning, indexing
   retrieval.py      chat memory, search, summaries
+  pdfindex.py       a PDF's index (bookmarks or contents page) as page ranges
   router.py         plain-language intent routing
   browse.py         multi-file reads and skim mode
   authoring.py      writing and editing documents

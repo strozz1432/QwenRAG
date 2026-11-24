@@ -29,6 +29,7 @@ from ..config import COMMANDS, EMBED, FORMAT, OLLAMA, STEER_MARK
 from ..llm import check_ollama
 from ..retrieval import MEMORY, build_summary, remember, retrieve
 from ..store import index, indexed_paths, load_store
+from . import picker
 from .controls import handle, parse
 from .render import draw
 from .state import S, echo, emit, fmt_secs, write
@@ -78,7 +79,10 @@ async def answer(q: str, use_docs: bool, query: str = "", intent: str = ""):
 async def summarise(arg: str):
     step("Finding the file", f"looking for '{arg}'", 0.05, note=f"Looking for {arg}")
     await asyncio.sleep(PACE)
-    info = await asyncio.to_thread(build_summary, arg, set_progress)
+    def choose(entries, source):    # runs in the worker thread; the checklist lives on the UI loop
+        return asyncio.run_coroutine_threadsafe(picker.ask(entries, source), S.loop).result()
+
+    info = await asyncio.to_thread(build_summary, arg, set_progress, None, choose)
     if "msg" in info:
         emit(info["msg"])
         record(f"Tried to summarise '{arg}': {info['msg'].splitlines()[0]}", False)

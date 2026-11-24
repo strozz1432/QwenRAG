@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from . import config
 from .config import FIGURE_MAX_VISION, SUMMARY_FORMAT
-from . import ocr
+from . import ocr, pdfindex
 from .llm import chat, embed, tag
 from .vision import describe, vision_ready
 from .store import CHUNKS, db, indexed_paths, search
@@ -96,8 +96,9 @@ def _summarise_picture(path: str, progress, note) -> dict:
             "name": short, "note": note}
 
 
-def build_summary(fragment: str, progress=None, forced_note: str | None = None) -> dict:
-    """Return {'msg': ...} on failure, else {'prompt', 'name', 'note'} ready to stream."""
+def build_summary(fragment: str, progress=None, forced_note: str | None = None, choose=None) -> dict:
+    """Return {'msg': ...} on failure, else {'prompt', 'name', 'note'} ready to stream.
+    `choose(entries, source) -> list[int] | None` lets the user pick which sections of a PDF with an index to summarise."""
     paths = indexed_paths()
     fragment = fragment.strip().strip("\"'")
     if fragment.startswith("~"):
@@ -137,17 +138,41 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None) 
     parts = [c[2] for c in sorted((c for c in CHUNKS if c[0] == path), key=lambda c: c[1])]
     if Path(path).suffix.lower() in ocr.IMAGE_EXTS and (not parts or parts[0].startswith("Image file ")):
         return _summarise_picture(path, progress, note)
-    figures = _describe_figures(path, progress) if Path(path).suffix.lower() == ".pdf" else ""
-    groups = ["\n".join(parts[i:i + 4]) for i in range(0, len(parts), 4)]
+    is_pdf = Path(path).suffix.lower() == ".pdf"
+    sections = None                      # the ticked sections, when the user picked part of a PDF's index
+    if choose and is_pdf:
+        entries, source = pdfindex.get_index(Path(path))
+        if len(entries) >= 2:
+            if progress:
+                progress("waiting for your pick", 0.1, "Waiting for your pick",
+                         "This PDF has an index. Pick the sections you want summarised")
+            picked = choose(entries, source)
+            if picked is None:
+                return {"msg": "Cancelled, nothing summarised.\n\n"}
+            if source == "contents page":
+                note = (note + " " if note else "") + "(index detected from the contents page)"
+            if set(picked) != set(range(len(entries))):
+                sections = [entries[i] for i in sorted(picked)]
+    figures = _describe_figures(path, progress) if is_pdf and not sections else ""
+    focus = ""
+    if sections:
+        size, groups = config.CHUNK * 4, []
+        for e in sections:
+            text = pdfindex.read_pages(Path(path), e.start, e.end)
+            for j in range(0, max(len(text), 1), size):
+                groups.append(f"## {e.title}{' (continued)' if j else ''}\n{text[j:j + size]}")
+        focus = "This is only some sections of a larger document. Give each section its own short heading, using the section titles. "
+    else:
+        groups = ["\n".join(parts[i:i + 4]) for i in range(0, len(parts), 4)]
     if figures:
         groups.append(figures)
     if progress:
         progress(f"reading {Path(path).name}", 0.09, "Reading the file", "Reading it")
         progress(f"{len(parts)} passages", 0.1, "Reading the file",
-                 f"Read it all ({len(parts)} passages)" +
+                 (f"Read {len(sections)} sections" if sections else f"Read it all ({len(parts)} passages)") +
                  (f", in {len(groups)} parts" if len(groups) > 1 else ""))
     if len(groups) <= 1:
-        prompt = f"Summarise this document clearly and concisely. {SUMMARY_FORMAT}\n\n{groups[0] if groups else ''}"
+        prompt = f"Summarise this document clearly and concisely. {focus}{SUMMARY_FORMAT}\n\n{groups[0] if groups else ''}"
     else:
         partials = []
         for i, g in enumerate(groups, 1):
@@ -164,7 +189,7 @@ def build_summary(fragment: str, progress=None, forced_note: str | None = None) 
             joined = ["\n".join(partials[i:i + 6]) for i in range(0, len(partials), 6)]
             partials = [chat(f"Combine these notes into one concise summary:\n\n{j}") for j in joined]
         prompt = ("Combine these notes about one document into a clear, concise summary. "
-                  f"{SUMMARY_FORMAT}\n\n" + "\n".join(partials))
+                  f"{focus}{SUMMARY_FORMAT}\n\n" + "\n".join(partials))
     return {"prompt": prompt, "name": path.replace(str(Path.home()), "~", 1), "note": note}
 
 
