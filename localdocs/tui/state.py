@@ -42,6 +42,7 @@ class S:
     busy = False              # a turn is running (or about to)
     wake: asyncio.Event       # set when something is added to `pending`
     on_submit = None          # set by the app: called with the text the user entered
+    picker = None             # the open checklist (tui/picker.py), which takes over the keyboard and screen
     loop: asyncio.AbstractEventLoop
 
 

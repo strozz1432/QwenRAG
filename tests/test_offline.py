@@ -9,6 +9,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from localdocs import config, keys, llm, ocr, store   # noqa: E402
 from localdocs import pdfindex   # noqa: E402
+from localdocs.tui import picker   # noqa: E402
+from localdocs.tui.state import S   # noqa: E402
 
 
 class Resp(io.BytesIO):
@@ -259,6 +261,83 @@ def test_get_index_none():
         make_pdf(p, ["one", "two"])
         with mock.patch.object(pdfindex, "contents_index", return_value=[]):
             assert pdfindex.get_index(p) == ([], "")
+
+
+def _picker(levels, label="bookmarks"):
+    entries = [pdfindex.Entry(lv, f"Section {i}", i + 1, i + 1) for i, lv in enumerate(levels)]
+    return picker.Picker(entries, label)
+
+
+def test_picker_toggle_parent_ticks_children():
+    p = _picker([0, 1, 1, 0, 1])
+    p.key("space", 10)
+    assert p.ticked == {0, 1, 2}
+    p.key("space", 10)
+    assert p.ticked == set()
+    p.key("down", 10)
+    p.key("space", 10)
+    assert p.ticked == {1}
+
+
+def test_picker_all_and_enter():
+    p = _picker([0, 1, 0])
+    p.key("enter", 10)
+    assert not p.done and "Tick at least one" in S.toast
+    p.key("a", 10)
+    assert p.ticked == {0, 1, 2}
+    p.key("a", 10)
+    assert p.ticked == set()
+    p.key("down", 10)
+    p.key("space", 10)
+    p.key("enter", 10)
+    assert p.done and p.result == [1]
+
+
+def test_picker_esc_and_scroll():
+    p = _picker([0] * 40)
+    for _ in range(25):
+        p.key("down", 10)
+    assert p.cursor == 25 and p.top <= p.cursor < p.top + 10
+    p.key("end", 10)
+    assert p.cursor == 39 and p.top <= p.cursor < p.top + 10
+    p.key("esc", 10)
+    assert p.done and p.result is None
+
+
+def test_picker_rows_indent_and_marks():
+    import re
+    p = _picker([0, 1, 0, 5], "contents page")
+    p.key("space", 10)      # ticks Section 0 and its child
+    plain = [re.sub(r"\x1b\[[0-9;]*m", "", r) for r in picker.picker_rows(p, 80, 8)]
+    assert len(plain) == 8
+    body = [r for r in plain if "Section" in r]
+    assert "[x] Section 0" in body[0] and "[x] Section 1" in body[1] and "[ ] Section 2" in body[2] and "[ ] Section 3" in body[3]
+    indent = [len(r) - len(r.lstrip(" ")) for r in (b.replace("❯", " ", 1) for b in body)]
+    assert indent[1] - indent[0] == 2 and indent[3] - indent[2] == 4   # one level = 2 columns, capped at two levels
+    assert any("contents page" in r for r in plain)
+    assert all(len(r) <= 80 for r in plain)
+    narrow = [re.sub(r"\x1b\[[0-9;]*m", "", r) for r in picker.picker_rows(p, 20, 8)]
+    assert all(len(r) <= 20 for r in narrow)
+
+
+def test_picker_owns_the_keyboard():
+    import asyncio
+    from localdocs.tui import controls
+    S.stop = asyncio.Event()
+    S.busy, S.current, S.buf = True, mock.Mock(), ""
+    S.picker = _picker([0, 0])
+    try:
+        controls.handle(("char", " "))
+        controls.handle(("char", "x"))              # typing doesn't leak into the input box
+        assert S.picker.ticked == {0} and S.buf == ""
+        controls.handle(("key", "esc"))
+        assert S.picker.done and S.picker.result is None
+        S.current.cancel.assert_not_called()         # esc closed the checklist, not the running job
+        assert not S.stop.is_set()
+        controls.handle(("key", "ctrl-c"))
+        assert S.stop.is_set()                       # ctrl-c still quits
+    finally:
+        S.picker, S.busy, S.current = None, False, None
 
 
 if __name__ == "__main__":

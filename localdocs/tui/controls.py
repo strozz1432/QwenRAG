@@ -190,7 +190,22 @@ def parse(s: str):
             i += 1
 
 
+def handle_picker(ev):
+    """While the checklist is open it owns the keyboard (esc closes only it; ctrl-c still quits)."""
+    kind = ev[0]
+    name = {"key": ev[1], "char": {" ": "space"}.get(ev[1], ev[1]) if kind == "char" else None}.get(kind)
+    if kind == "mouse" and ev[1] in (64, 65):
+        name = "up" if ev[1] == 64 else "down"
+    if name in ("ctrl-c", "ctrl-d"):
+        S.stop.set()
+    elif name:
+        S.picker.key(name, max(1, term_size()[1] - 2))
+    S.dirty = True
+
+
 def handle(ev):
+    if S.picker:
+        return handle_picker(ev)
     kind = ev[0]
     if kind != "mouse":
         S.sel_a = S.sel_b = None
