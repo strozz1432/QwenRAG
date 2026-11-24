@@ -158,7 +158,8 @@ def make_pdf(path, pages, bookmarks=()):
             key = f"b{n}_{i}"
             c.bookmarkPage(key)
             c.addOutlineEntry(title, key, level)
-        c.drawString(72, 700, text)
+        for i, line in enumerate(text.split("\n")):
+            c.drawString(72, 700 - 16 * i, line)
         c.showPage()
     c.save()
 
@@ -206,6 +207,58 @@ def test_read_pages():
         text = pdfindex.read_pages(p, 2, 3)
         assert "bravo two" in text and "charlie three" in text
         assert "alpha one" not in text and "delta four" not in text
+
+
+def _contents_pdf(d):
+    p = Path(d) / "c.pdf"
+    make_pdf(p, ["Cover page", "Contents\nIntro .... 1\nSetup .... 3", "Intro\nwelcome text", "more intro",
+                 "Setup\ninstall text", "closing"])
+    return p
+
+
+def test_contents_index_offset():
+    with tempfile.TemporaryDirectory() as d:
+        p = _contents_pdf(d)
+        reply = '[{"title":"Intro","page":1,"level":0},{"title":"Setup","page":3,"level":0}]'
+        idx = pdfindex.contents_index(p, ask=lambda prompt: "Sure: " + reply)
+        assert [(e.title, e.start, e.end) for e in idx] == [("Intro", 3, 4), ("Setup", 5, 6)]
+
+
+def test_contents_index_garbage():
+    with tempfile.TemporaryDirectory() as d:
+        p = _contents_pdf(d)
+        assert pdfindex.contents_index(p, ask=lambda prompt: "sorry") == []
+        assert pdfindex.contents_index(p, ask=lambda prompt: '[{"title":"X","page":999}]') == []
+        assert pdfindex.contents_index(p, ask=lambda prompt: '[{"title":"Setup","page":"three"}]') == []
+
+
+def test_contents_index_calibration_fails():
+    with tempfile.TemporaryDirectory() as d:
+        p = _contents_pdf(d)
+        reply = '[{"title":"Nowhere","page":1},{"title":"Setup","page":3}]'
+        assert pdfindex.contents_index(p, ask=lambda prompt: reply) == []
+
+
+def test_get_index_prefers_bookmarks_and_caches():
+    pdfindex._CACHE.clear()
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, ["one", "two", "three"], [(1, "A", 0), (2, "B", 0)])
+        with mock.patch.object(pdfindex, "contents_index", side_effect=AssertionError("fallback used")), \
+             mock.patch.object(pdfindex, "bookmark_index", wraps=pdfindex.bookmark_index) as spy:
+            first, src = pdfindex.get_index(p)
+            second, src2 = pdfindex.get_index(p)
+        assert src == src2 == "bookmarks" and [e.title for e in first] == ["A", "B"]
+        assert spy.call_count == 1 and second == first
+
+
+def test_get_index_none():
+    pdfindex._CACHE.clear()
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.pdf"
+        make_pdf(p, ["one", "two"])
+        with mock.patch.object(pdfindex, "contents_index", return_value=[]):
+            assert pdfindex.get_index(p) == ([], "")
 
 
 if __name__ == "__main__":
